@@ -15,9 +15,13 @@ if [ ! -f /usr/bin/yt-dlp ]; then
     chmod +x /usr/bin/yt-dlp
 fi
 
-mkdir -p /opt/ytdlp-web
+mkdir -p /opt/ytdlp-web /etc/conf.d
 cp -f "$SERVICE_DIR/app.py" /opt/ytdlp-web/app.py
 chmod +x /opt/ytdlp-web/app.py
+
+cat << EOF > /etc/conf.d/ytdlp-web
+export STORAGE_BASE="${STORAGE_BASE:-/srv/storage}"
+EOF
 
 cat << 'EOF' > /etc/init.d/ytdlp-web
 #!/sbin/openrc-run

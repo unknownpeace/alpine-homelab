@@ -43,6 +43,16 @@ chown -R forgejo:www-data /etc/forgejo /var/lib/forgejo
 rc-update add forgejo default >/dev/null 2>&1 || true
 rc-service forgejo restart >/dev/null 2>&1 || true
 
+# Provision primary administrator account seamlessly
+log_info "Ensuring initial Forgejo administrator account ($AUTH_USER)..."
+for _ in 1 2 3; do
+    if [ -f /var/lib/forgejo/data/forgejo.db ]; then
+        su -s /bin/sh forgejo -c "forgejo admin user create --admin --username '$AUTH_USER' --password '$AUTH_PASS' --email '$AUTH_USER@$BASE_DOMAIN' --must-change-password=false" >/dev/null 2>&1 || true
+        break
+    fi
+    sleep 1
+done
+
 deploy_caddy_snippet "forgejo"
 
 log_success "Forgejo Git running on https://git.$BASE_DOMAIN"

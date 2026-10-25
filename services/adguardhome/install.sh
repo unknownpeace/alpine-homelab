@@ -22,8 +22,6 @@ AUTH_PASS="${AUTH_PASS:-admin}"
 PASS_HASH=""
 if command -v caddy >/dev/null 2>&1; then
     PASS_HASH=$(caddy hash-password --plaintext "$AUTH_PASS" 2>/dev/null || true)
-elif command -v python3 >/dev/null 2>&1; then
-    PASS_HASH=$(python3 -c "import crypt; print(crypt.crypt('$AUTH_PASS', crypt.mksalt(crypt.METHOD_BLOWFISH)))" 2>/dev/null || true)
 fi
 
 # Generate AdGuardHome.yaml if not present

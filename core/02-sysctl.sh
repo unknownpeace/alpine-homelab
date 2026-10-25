@@ -11,9 +11,12 @@ log_info "Applying high-performance kernel parameters (BBR / FQ / ip_forward)...
 mkdir -p /etc/sysctl.d
 cat << 'EOF' > /etc/sysctl.d/99-homelab.conf
 net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
 net.ipv4.ip_unprivileged_port_start = 53
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 512
 EOF
 sysctl -p /etc/sysctl.d/99-homelab.conf >/dev/null 2>&1 || true
 

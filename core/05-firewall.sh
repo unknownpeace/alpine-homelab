@@ -15,6 +15,9 @@ if [ "${GATEWAY_MODE:-yes}" = "yes" ]; then
     fi
 cat << EOF > /etc/nftables.nft
 table inet homelab {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+    }
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
         oifname != "lxcbr0" ip saddr 10.0.3.0/24 masquerade
@@ -30,6 +33,9 @@ EOF
 else
 cat << EOF > /etc/nftables.nft
 table inet homelab {
+    chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+    }
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
         oifname != "lxcbr0" ip saddr 10.0.3.0/24 masquerade

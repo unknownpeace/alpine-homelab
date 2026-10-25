@@ -27,6 +27,15 @@ cat << EOF > /etc/caddy/Caddyfile
     skip_install_trust
 }
 
+(security_headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+}
+
 (homelab_auth) {
     basic_auth {
         $AUTH_USER $RAW_HASH
@@ -34,6 +43,7 @@ cat << EOF > /etc/caddy/Caddyfile
 }
 
 homelab.$BASE_DOMAIN, $IP_HOST {
+    import security_headers
     handle /api/proxy/update {
         import homelab_auth
         reverse_proxy 127.0.0.1:8888

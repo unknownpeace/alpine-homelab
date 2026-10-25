@@ -7,6 +7,7 @@ set -e
 
 SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+ROOT_DIR="$SCRIPT_DIR"
 LIB_DIR="$SCRIPT_DIR/lib"
 CORE_DIR="$SCRIPT_DIR/core"
 SERVICES_DIR="$SCRIPT_DIR/services"
@@ -416,16 +417,29 @@ cmd_backup() {
         cp -rf /etc/adguardhome "$tmp/adguardhome/" 2>/dev/null || true
     fi
 
-    # 5. System config & Caddy PKI
+    # 5. LXC Containers configuration
+    if [ -d /var/lib/lxc ]; then
+        mkdir -p "$tmp/lxc"
+        for cdir in /var/lib/lxc/*; do
+            if [ -f "$cdir/config" ]; then
+                cname=$(basename "$cdir")
+                mkdir -p "$tmp/lxc/$cname"
+                cp -f "$cdir/config" "$tmp/lxc/$cname/" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # 6. System config, Firewall & Caddy PKI
     mkdir -p "$tmp/system"
     [ -f "/opt/homelab/config.env" ] && cp -f "/opt/homelab/config.env" "$tmp/system/config.env"
+    [ -f "/etc/nftables.nft" ] && cp -f "/etc/nftables.nft" "$tmp/system/nftables.nft"
     [ -d "/var/lib/caddy/.local/share/caddy/pki" ] && cp -rf "/var/lib/caddy/.local/share/caddy/pki" "$tmp/system/pki"
 
-    # 6. Compress
+    # 7. Compress
     tar -czf "$target" -C "$tmp" .
     rm -rf "$tmp"
 
-    # 7. Rotation (keep 7 newest)
+    # 8. Rotation (keep 7 newest)
     find "$dest" -maxdepth 1 -name "homelab_backup_*.tar.gz" | sort -r | tail -n +8 | xargs rm -f 2>/dev/null || true
 
     log_success "Backup created: $target ($(du -h "$target" | awk '{print $1}'))"
@@ -503,9 +517,24 @@ cmd_restore() {
         cp -rf "$tmp/adguardhome/"* /etc/adguardhome/
     fi
 
-    # Restore System & PKI
+    # Restore LXC Configs
+    if [ -d "$tmp/lxc" ]; then
+        for cdir in "$tmp/lxc/"*; do
+            if [ -d "$cdir" ]; then
+                cname=$(basename "$cdir")
+                mkdir -p "/var/lib/lxc/$cname"
+                [ -f "$cdir/config" ] && cp -f "$cdir/config" "/var/lib/lxc/$cname/config"
+            fi
+        done
+    fi
+
+    # Restore System, Firewall & PKI
     if [ -d "$tmp/system" ]; then
         [ -f "$tmp/system/config.env" ] && cp -f "$tmp/system/config.env" /opt/homelab/config.env
+        if [ -f "$tmp/system/nftables.nft" ]; then
+            cp -f "$tmp/system/nftables.nft" /etc/nftables.nft
+            rc-service nftables restart >/dev/null 2>&1 || true
+        fi
         if [ -d "$tmp/system/pki" ]; then
             mkdir -p /var/lib/caddy/.local/share/caddy
             cp -rf "$tmp/system/pki" /var/lib/caddy/.local/share/caddy/

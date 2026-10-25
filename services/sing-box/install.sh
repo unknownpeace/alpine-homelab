@@ -41,13 +41,18 @@ EOF
 chmod +x "$SERVICE_DIR/update-rules.sh"
 "$SERVICE_DIR/update-rules.sh"
 
-# 4. OpenRC init script
+# 4. OpenRC init script with supervise-daemon auto-recovery
 cat << 'EOF' > /etc/init.d/sing-box
 #!/sbin/openrc-run
+name="sing-box"
+description="sing-box Universal Proxy & Smart DNS Engine"
+supervisor="supervise-daemon"
 command="/usr/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
-command_background=true
-pidfile="/run/sing-box.pid"
+respawn_delay=2
+respawn_max=5
+respawn_period=60
+
 depend() {
     need net
     after firewall

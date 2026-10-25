@@ -15,6 +15,8 @@ if [ "${BRIDGE_ENABLE:-yes}" = "yes" ] && [ "$PHYSICAL_IF" != "br0" ] && ! grep 
     # Update /etc/network/interfaces for persistence across reboots
     if grep -q "iface $PHYSICAL_IF inet dhcp" /etc/network/interfaces; then
         sed -i "s/iface $PHYSICAL_IF inet dhcp/iface $PHYSICAL_IF inet manual/" /etc/network/interfaces
+    elif grep -q "iface $PHYSICAL_IF inet static" /etc/network/interfaces; then
+        sed -i "s/iface $PHYSICAL_IF inet static/iface $PHYSICAL_IF inet manual/" /etc/network/interfaces
     fi
 cat << EOF >> /etc/network/interfaces
 

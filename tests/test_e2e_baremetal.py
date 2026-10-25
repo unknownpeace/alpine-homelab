@@ -50,6 +50,7 @@ def step_upload_script():
     subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", f"root@{VM_IP}", "ln -sf /opt/homelab/homelab.sh /usr/local/bin/homelab && chmod -R +x /opt/homelab/*.sh /opt/homelab/core/*.sh /opt/homelab/services/*/*.sh /root/verify_lxc_api.py"], check=True)
 
     # Pre-configure unattended config.env with live test subscription
+    test_proxy = os.environ.get("TEST_PROXY_INPUT", "direct")
     config_env = (
         'AUTH_USER="admin"\n'
         'AUTH_PASS="admin"\n'
@@ -60,7 +61,7 @@ def step_upload_script():
         'BRIDGE_ENABLE="yes"\n'
         'DNS_UPSTREAM_PRIMARY="https://dns.adguard-dns.com/dns-query"\n'
         'DNS_UPSTREAM_SECONDARY="1.1.1.1"\n'
-        'PROXY_INPUT="https://sub.accessbyme.com/sub/52d6b91f62f84bd59b26e88bb280c76c?fmt=best"\n'
+        f'PROXY_INPUT="{test_proxy}"\n'
         'ENABLE_CADDY="yes"\n'
         'ENABLE_DASHBOARD="yes"\n'
         'ENABLE_SINGBOX="yes"\n'

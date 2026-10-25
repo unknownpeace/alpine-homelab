@@ -434,7 +434,9 @@ config = {
             "interface_name": "tun0",
             "address": ["172.19.0.1/30"],
             "auto_route": True,
+            "auto_redirect": True,
             "strict_route": False,
+            "stack": "mixed",
             "dns_mode": tun_dns_mode
         },
         {
