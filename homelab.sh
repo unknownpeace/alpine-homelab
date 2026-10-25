@@ -35,6 +35,7 @@ usage() {
     echo ""
     echo "Commands:"
     echo "  install            Run complete modular deployment (core + enabled services)"
+    echo "  reconfigure        Re-run setup wizard to change services, passwords, or proxy"
     echo "  update             Pull git updates, refresh rules, and restart services"
     echo "  doctor             Run full automated system health & diagnostics audit"
     echo "  status             Show quick summary of running services and resources"
@@ -53,6 +54,10 @@ cmd_install() {
     echo -e "${C_BLUE}================================================================${C_RESET}"
     echo -e "${C_BLUE}    Zero-Docker Alpine Homelab Appliance (Modular Edition)      ${C_RESET}"
     echo -e "${C_BLUE}================================================================${C_RESET}"
+    if [ -f "/opt/homelab/config.env" ]; then
+        log_info "Using saved configuration: /opt/homelab/config.env"
+        log_info "To re-run the setup wizard with new choices, run: homelab reconfigure"
+    fi
     log_info "Host Primary IP : $IP_HOST (Interface: $PHYSICAL_IF)"
     log_info "Base Domain     : *.$BASE_DOMAIN"
     log_info "Auth Username   : $AUTH_USER"
@@ -102,6 +107,22 @@ EOF
 
     # Print Summary Cheat Sheet
     cmd_summary
+}
+
+cmd_reconfigure() {
+    check_root
+    echo -e "${C_CYAN}================================================================${C_RESET}"
+    echo -e "${C_CYAN}    Alpine Homelab Appliance - Reconfiguration Wizard           ${C_RESET}"
+    echo -e "${C_CYAN}================================================================${C_RESET}"
+    local cfg="/opt/homelab/config.env"
+    [ ! -f "$cfg" ] && cfg="$SCRIPT_DIR/config.env"
+    if [ -f "$cfg" ]; then
+        cp -f "$cfg" "${cfg}.bak"
+        rm -f "$cfg"
+        log_info "Current configuration backed up to ${cfg}.bak"
+    fi
+    . "$LIB_DIR/detect.sh"
+    cmd_install
 }
 
 cmd_summary() {
@@ -531,6 +552,9 @@ shift || true
 case "$CMD" in
     install)
         cmd_install "$@"
+        ;;
+    reconfigure|config)
+        cmd_reconfigure "$@"
         ;;
     update)
         cmd_update "$@"

@@ -41,6 +41,10 @@ fi
 if [ -d "$TARGET_DIR/.git" ]; then
     echo "[*] Updating existing repository in $TARGET_DIR..."
     git -C "$TARGET_DIR" pull --ff-only || echo "[!] Notice: Local changes present, continuing with local version."
+elif [ -d "$TARGET_DIR" ]; then
+    echo "[!] Target directory $TARGET_DIR exists but is not a git repository. Backing up..."
+    mv "$TARGET_DIR" "${TARGET_DIR}.bak.$(date +%s)"
+    git clone "$CLONE_URL" "$TARGET_DIR"
 else
     echo "[*] Cloning repository to $TARGET_DIR..."
     mkdir -p "$(dirname "$TARGET_DIR")"

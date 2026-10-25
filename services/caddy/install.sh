@@ -19,6 +19,7 @@ setcap cap_net_bind_service=+ep /usr/sbin/caddy 2>/dev/null || true
 RAW_HASH=$(caddy hash-password --plaintext "$AUTH_PASS")
 
 mkdir -p /etc/caddy/conf.d
+rm -f /etc/caddy/conf.d/*.conf
 
 cat << EOF > /etc/caddy/Caddyfile
 {
