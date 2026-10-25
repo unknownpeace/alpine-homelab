@@ -79,8 +79,18 @@ def parse_single_node(link: str) -> dict:
         elif t_type == "grpc":
             grpc_cfg = {"type": "grpc"}
             if "serviceName" in params: grpc_cfg["service_name"] = params["serviceName"]
-            elif "spx" in params: grpc_cfg["service_name"] = params["spx"]
             ob["transport"] = grpc_cfg
+        elif t_type in ["xhttp", "splithttp"]:
+            xhttp_cfg = {"type": "xhttp"}
+            if "path" in params: xhttp_cfg["path"] = params["path"]
+            if "host" in params: xhttp_cfg["host"] = [params["host"]]
+            if "mode" in params: xhttp_cfg["mode"] = params["mode"]
+            ob["transport"] = xhttp_cfg
+        elif t_type == "http":
+            http_cfg = {"type": "http"}
+            if "path" in params: http_cfg["path"] = params["path"]
+            if "host" in params: http_cfg["host"] = [params["host"]]
+            ob["transport"] = http_cfg
         sec = params.get("security")
         if sec in ["tls", "reality"]:
             tls_cfg = {"enabled": True}
