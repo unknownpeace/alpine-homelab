@@ -40,6 +40,7 @@ usage() {
     echo "  status             Show quick summary of running services and resources"
     echo "  backup [dir]       Create atomic disaster recovery backup of DBs & configs"
     echo "  restore <file>     Restore full homelab state from a backup archive"
+    echo "  proxy [node|url]   Update sing-box outbound proxy/subscription or refresh"
     echo "  tailscale <act>    Manage Tailscale Zero-Trust mesh VPN (up, down, status)"
     echo "  service <act> <svc> Manage a service (start, stop, restart, status, logs)"
     echo "  help               Display this help message"
@@ -487,6 +488,25 @@ cmd_tailscale() {
     esac
 }
 
+cmd_proxy() {
+    check_root
+    local input="$*"
+    if [ -n "$input" ]; then
+        log_info "Updating outbound proxy connection..."
+        if [ -f "$ROOT_DIR/config.env" ]; then
+            if grep -q "^PROXY_INPUT=" "$ROOT_DIR/config.env"; then
+                sed -i "s|^PROXY_INPUT=.*|PROXY_INPUT=\"$input\"|" "$ROOT_DIR/config.env"
+            else
+                echo "PROXY_INPUT=\"$input\"" >> "$ROOT_DIR/config.env"
+            fi
+        fi
+        /usr/local/bin/update-sub.py "$input"
+    else
+        log_info "Reloading outbound proxy connection from config.env..."
+        /usr/local/bin/update-sub.py
+    fi
+}
+
 # Main Command Dispatcher
 CMD="${1:-help}"
 shift || true
@@ -518,6 +538,9 @@ case "$CMD" in
         ;;
     tailscale)
         cmd_tailscale "$@"
+        ;;
+    proxy)
+        cmd_proxy "$@"
         ;;
     help|--help|-h)
         usage

@@ -1,5 +1,39 @@
 #!/usr/bin/env python3
-import json, urllib.request, urllib.parse, base64, subprocess, sys, time, os
+import json, urllib.request, urllib.parse, base64, subprocess, sys, time, os, socket
+
+def get_default_ip():
+    env_ip = os.environ.get("IP_HOST")
+    if env_ip and env_ip != "127.0.0.1":
+        return env_ip
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("1.1.1.1", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+# Load homelab config.env if available to source variables seamlessly
+def load_env_file():
+    for p in ["/opt/homelab/config.env", os.path.join(os.path.dirname(__file__), "../../config.env")]:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k not in os.environ and v:
+                            os.environ[k] = v
+            except Exception:
+                pass
+            break
+
+load_env_file()
 
 RULE_DIR = "/var/lib/sing-box/rules"
 os.makedirs(RULE_DIR, exist_ok=True)
@@ -42,7 +76,11 @@ if not os.path.exists(adguard_srs) or os.path.getsize(adguard_srs) == 0:
         except Exception:
             pass
 
-SUB_URL = sys.argv[1] if len(sys.argv) > 1 else ""
+# Determine target URL or node string
+if len(sys.argv) > 1 and sys.argv[1].strip():
+    SUB_URL = " ".join(sys.argv[1:]).strip()
+else:
+    SUB_URL = os.environ.get("PROXY_INPUT", os.environ.get("SUB_URL", "direct")).strip()
 
 def parse_single_node(link: str) -> dict:
     link = link.strip()
@@ -295,10 +333,14 @@ custom_groups = [
 
 main_selector = "🚀 Выбор узла"
 final_outbounds = custom_groups + provider_groups + clean_nodes + [{"type": "direct", "tag": "direct"}]
-IP_HOST = os.environ.get("IP_HOST", "127.0.0.1")
+IP_HOST = get_default_ip()
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "lan").lstrip(".")
 DNS_PRIMARY = os.environ.get("DNS_UPSTREAM_PRIMARY", "https://dns.adguard-dns.com/dns-query")
 DNS_SECONDARY = os.environ.get("DNS_UPSTREAM_SECONDARY", "1.1.1.1")
+if os.environ.get("ENABLE_ADGUARD_HOME", "no") == "yes":
+    dns_in_port = int(os.environ.get("SINGBOX_DNS_PORT", "5353"))
+else:
+    dns_in_port = int(os.environ.get("SINGBOX_DNS_PORT", "53"))
 
 predefined_hosts = {
     f"vault.{BASE_DOMAIN}": IP_HOST,
@@ -349,7 +391,7 @@ config = {
             "type": "direct",
             "tag": "dns-in",
             "listen": "0.0.0.0",
-            "listen_port": int(os.environ.get("SINGBOX_DNS_PORT", "53"))
+            "listen_port": dns_in_port
         }
     ],
     "outbounds": final_outbounds,
