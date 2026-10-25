@@ -1,0 +1,25 @@
+# Temporary and log files
+*.log
+*.tmp
+*.bak
+scratch/
+tmp/
+
+# Local configuration and secrets
+config.env
+*.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local certificates and private keys (keep repository clean)
+*.crt
+*.key
+*.pem
+
+# Editor artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

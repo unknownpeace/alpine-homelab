@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+import json, urllib.request, urllib.parse, base64, subprocess, sys, time, os
+
+RULE_DIR = "/var/lib/sing-box/rules"
+os.makedirs(RULE_DIR, exist_ok=True)
+rules_map = {
+    "geoip-ru.srs": "https://testingcf.jsdelivr.net/gh/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geoip/geoip-ru.srs",
+    "geosite-tld-ru.srs": "https://testingcf.jsdelivr.net/gh/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-tld-ru.srs",
+    "geosite-category-ru.srs": "https://testingcf.jsdelivr.net/gh/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-category-ru.srs",
+    "geosite-ru-blocked.srs": "https://testingcf.jsdelivr.net/gh/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-ru-blocked.srs",
+    "geosite-category-ai.srs": "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/category-ai-!cn.srs",
+}
+backup_rules_map = {
+    "geoip-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/rule-set-geoip/geoip-ru.srs",
+    "geosite-tld-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-tld-ru.srs",
+    "geosite-category-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-category-ru.srs",
+    "geosite-ru-blocked.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-ru-blocked.srs",
+    "geosite-category-ai.srs": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ai-!cn.srs",
+}
+for rfile, main_url in rules_map.items():
+    rpath = os.path.join(RULE_DIR, rfile)
+    if not os.path.exists(rpath) or os.path.getsize(rpath) == 0:
+        for url in [main_url, backup_rules_map[rfile]]:
+            try:
+                urllib.request.urlretrieve(url, rpath)
+                if os.path.exists(rpath) and os.path.getsize(rpath) > 0:
+                    break
+            except Exception:
+                pass
+
+adguard_srs = os.path.join(RULE_DIR, "adguard-dns.srs")
+if not os.path.exists(adguard_srs) or os.path.getsize(adguard_srs) == 0:
+    flist = "/tmp/adguard_filter.txt"
+    for url in ["https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt", "https://raw.githubusercontent.com/AdguardTeam/AdguardSDNSFilter/gh-pages/Filters/filter.txt"]:
+        try:
+            urllib.request.urlretrieve(url, flist)
+            if os.path.exists(flist) and os.path.getsize(flist) > 0:
+                subprocess.run(["sing-box", "rule-set", "convert", flist, "-t", "adguard", "-o", adguard_srs], check=False)
+                if os.path.exists(flist): os.remove(flist)
+                if os.path.exists(adguard_srs) and os.path.getsize(adguard_srs) > 0:
+                    break
+        except Exception:
+            pass
+
+SUB_URL = sys.argv[1] if len(sys.argv) > 1 else ""
+
+def parse_single_node(link: str) -> dict:
+    link = link.strip()
+    if not link: return None
+    try:
+        p = urllib.parse.urlparse(link)
+    except Exception:
+        return None
+    scheme = p.scheme.lower()
+    tag = urllib.parse.unquote(p.fragment) if p.fragment else f"{scheme.upper()}-{p.hostname or 'node'}"
+
+    # 1. VLESS
+    if scheme == "vless":
+        uuid = p.username
+        server = p.hostname
+        port = p.port or 443
+        qs = urllib.parse.parse_qs(p.query)
+        params = {k: v[0] for k, v in qs.items()}
+        ob = {
+            "type": "vless",
+            "tag": tag,
+            "server": server,
+            "server_port": port,
+            "uuid": uuid
+        }
+        if "flow" in params:
+            ob["flow"] = params["flow"]
+        t_type = params.get("type", "tcp")
+        if t_type == "ws":
+            ws_cfg = {"type": "ws"}
+            if "path" in params: ws_cfg["path"] = params["path"]
+            if "host" in params: ws_cfg["headers"] = {"Host": params["host"]}
+            ob["transport"] = ws_cfg
+        elif t_type == "grpc":
+            grpc_cfg = {"type": "grpc"}
+            if "serviceName" in params: grpc_cfg["service_name"] = params["serviceName"]
+            elif "spx" in params: grpc_cfg["service_name"] = params["spx"]
+            ob["transport"] = grpc_cfg
+        sec = params.get("security")
+        if sec in ["tls", "reality"]:
+            tls_cfg = {"enabled": True}
+            sni = params.get("sni") or params.get("peer")
+            if sni: tls_cfg["server_name"] = sni
+            if "alpn" in params: tls_cfg["alpn"] = params["alpn"].split(",")
+            if params.get("insecure") in ["1", "true"]: tls_cfg["insecure"] = True
+            fp = params.get("fp")
+            if fp: tls_cfg["utls"] = {"enabled": True, "fingerprint": fp}
+            if sec == "reality":
+                real_cfg = {"enabled": True}
+                if "pbk" in params: real_cfg["public_key"] = params["pbk"]
+                if "sid" in params: real_cfg["short_id"] = params["sid"]
+                if "spx" in params: real_cfg["spider_x"] = params["spx"]
+                tls_cfg["reality"] = real_cfg
+            ob["tls"] = tls_cfg
+        return ob
+
+    # 2. Shadowsocks
+    elif scheme == "ss":
+        server, port, method, password = None, None, None, None
+        if "@" in p.netloc:
+            userinfo, hostport = p.netloc.split("@", 1)
+            try:
+                padded = userinfo + "=" * (-len(userinfo) % 4)
+                decoded = base64.b64decode(padded).decode("utf-8")
+                if ":" in decoded: method, password = decoded.split(":", 1)
+            except Exception:
+                if ":" in userinfo: method, password = userinfo.split(":", 1)
+            if ":" in hostport:
+                server, port_str = hostport.split(":", 1)
+                port = int(port_str.split("/")[0])
+        else:
+            try:
+                padded = p.netloc + "=" * (-len(p.netloc) % 4)
+                decoded = base64.b64decode(padded).decode("utf-8")
+                if "@" in decoded:
+                    userinfo, hostport = decoded.split("@", 1)
+                    if ":" in userinfo: method, password = userinfo.split(":", 1)
+                    if ":" in hostport:
+                        server, port_str = hostport.split(":", 1)
+                        port = int(port_str.split("/")[0])
+            except Exception:
+                pass
+        if server and port and method and password:
+            return {
+                "type": "shadowsocks",
+                "tag": tag,
+                "server": server,
+                "server_port": port,
+                "method": method,
+                "password": password
+            }
+
+    # 3. Trojan
+    elif scheme == "trojan":
+        password = p.username or p.netloc.split("@")[0]
+        server = p.hostname
+        port = p.port or 443
+        qs = urllib.parse.parse_qs(p.query)
+        params = {k: v[0] for k, v in qs.items()}
+        ob = {
+            "type": "trojan",
+            "tag": tag,
+            "server": server,
+            "server_port": port,
+            "password": password,
+            "tls": {
+                "enabled": True,
+                "server_name": params.get("sni") or server,
+                "insecure": params.get("allowInsecure") in ["1", "true"]
+            }
+        }
+        if "alpn" in params:
+            ob["tls"]["alpn"] = params["alpn"].split(",")
+        return ob
+
+    # 4. Hysteria 2
+    elif scheme in ["hysteria2", "hy2"]:
+        auth = p.username or (p.netloc.split("@")[0] if "@" in p.netloc else "")
+        server = p.hostname
+        port = p.port or 443
+        qs = urllib.parse.parse_qs(p.query)
+        params = {k: v[0] for k, v in qs.items()}
+        ob = {
+            "type": "hysteria2",
+            "tag": tag,
+            "server": server,
+            "server_port": port,
+            "password": auth,
+            "tls": {
+                "enabled": True,
+                "server_name": params.get("sni") or server,
+                "insecure": params.get("insecure") in ["1", "true"]
+            }
+        }
+        if "obfs" in params:
+            ob["obfs"] = {
+                "type": params["obfs"],
+                "password": params.get("obfs-password", "")
+            }
+        return ob
+
+    return None
+
+TARGET = SUB_URL.strip()
+raw_outbounds = []
+
+if TARGET and TARGET.lower() != "direct":
+    if any(TARGET.startswith(proto) for proto in ["vless://", "ss://", "trojan://", "hy2://", "hysteria2://"]):
+        node = parse_single_node(TARGET)
+        if node:
+            raw_outbounds.append(node)
+    elif TARGET.startswith("http://") or TARGET.startswith("https://"):
+        req = urllib.request.Request(TARGET, headers={"User-Agent": "sing-box/1.14.3"})
+        resp_data = None
+        for attempt in range(1, 4):
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    resp_data = resp.read().decode('utf-8', errors='ignore')
+                    break
+            except Exception as e:
+                print(f"Attempt {attempt}/3 failed to fetch subscription: {e}", file=sys.stderr)
+                time.sleep(2)
+        if resp_data:
+            try:
+                j = json.loads(resp_data)
+                if isinstance(j, dict) and "outbounds" in j:
+                    raw_outbounds = j.get("outbounds", [])
+            except Exception:
+                text_lines = []
+                try:
+                    padded = resp_data.strip() + "=" * (-len(resp_data.strip()) % 4)
+                    decoded_text = base64.b64decode(padded).decode('utf-8', errors='ignore')
+                    text_lines = decoded_text.splitlines()
+                except Exception:
+                    text_lines = resp_data.splitlines()
+                for line in text_lines:
+                    line = line.strip()
+                    if any(line.startswith(proto) for proto in ["vless://", "ss://", "trojan://", "hy2://", "hysteria2://"]):
+                        n = parse_single_node(line)
+                        if n:
+                            raw_outbounds.append(n)
+
+def is_dummy(ob):
+    tag = ob.get("tag", "")
+    server = ob.get("server", "")
+    port = ob.get("server_port", 0)
+    if server in ["127.0.0.1", "0.0.0.0"] or port == 1:
+        return True
+    if any(tag.startswith(p) for p in ["ℹ", "⛔", "📰", "⚠️"]):
+        return True
+    return False
+
+clean_nodes = []
+provider_groups = []
+seen_tags = set()
+
+for ob in raw_outbounds:
+    ob.pop("idle_only", None)
+    tag = ob.get("tag")
+    t = ob.get("type")
+    if not tag or tag in seen_tags or is_dummy(ob):
+        continue
+    seen_tags.add(tag)
+    if t in ["selector", "urltest"]:
+        if tag in ["select", "🌐 Автовыбор", "🚀 Выбор узла", "🤖 Нейросети", "Torrent"]:
+            continue
+        provider_groups.append(ob)
+    elif t not in ["direct", "block", "dns-out"]:
+        clean_nodes.append(ob)
+
+node_tags = [ob["tag"] for ob in clean_nodes]
+
+custom_groups = [
+    {
+        "type": "urltest",
+        "tag": "🌐 Автовыбор",
+        "outbounds": node_tags if node_tags else ["direct"],
+        "url": "https://www.gstatic.com/generate_204",
+        "interval": "3m",
+        "tolerance": 50
+    },
+    {
+        "type": "selector",
+        "tag": "🚀 Выбор узла",
+        "outbounds": ["🌐 Автовыбор", "direct"] + node_tags,
+        "default": "🌐 Автовыбор"
+    },
+    {
+        "type": "selector",
+        "tag": "🤖 Нейросети",
+        "outbounds": ["🌐 Автовыбор", "🚀 Выбор узла", "direct"] + node_tags,
+        "default": "🌐 Автовыбор"
+    },
+    {
+        "type": "selector",
+        "tag": "Torrent",
+        "outbounds": ["direct"] + node_tags,
+        "default": "direct"
+    }
+]
+
+main_selector = "🚀 Выбор узла"
+final_outbounds = custom_groups + provider_groups + clean_nodes + [{"type": "direct", "tag": "direct"}]
+IP_HOST = os.environ.get("IP_HOST", "127.0.0.1")
+BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "lan").lstrip(".")
+DNS_PRIMARY = os.environ.get("DNS_UPSTREAM_PRIMARY", "https://dns.adguard-dns.com/dns-query")
+DNS_SECONDARY = os.environ.get("DNS_UPSTREAM_SECONDARY", "1.1.1.1")
+
+predefined_hosts = {
+    f"vault.{BASE_DOMAIN}": IP_HOST,
+    f"git.{BASE_DOMAIN}": IP_HOST,
+    f"matrix.{BASE_DOMAIN}": IP_HOST,
+    f"music.{BASE_DOMAIN}": IP_HOST,
+    f"torrent.{BASE_DOMAIN}": IP_HOST,
+    f"ytdl.{BASE_DOMAIN}": IP_HOST,
+    f"proxy.{BASE_DOMAIN}": IP_HOST,
+    f"lxc.{BASE_DOMAIN}": IP_HOST,
+    f"homelab.{BASE_DOMAIN}": IP_HOST
+}
+
+config = {
+    "log": {"level": "info"},
+    "dns": {
+        "servers": [
+            {
+                "tag": "hosts-lan",
+                "type": "hosts",
+                "predefined": predefined_hosts
+            },
+            {"tag": "ai-dns", "type": "tls", "server": DNS_SECONDARY, "detour": "🤖 Нейросети"},
+            {"tag": "remote-dns", "type": "tls", "server": DNS_SECONDARY, "detour": main_selector},
+            {"tag": "direct-dns", "type": "udp", "server": "77.88.8.8", "detour": "direct"}
+        ],
+        "rules": [
+            {"domain_suffix": [f".{BASE_DOMAIN}"], "server": "hosts-lan"},
+            {"rule_set": "adguard-dns", "action": "reject"},
+            {"rule_set": "geosite-category-ai", "server": "ai-dns"},
+            {"rule_set": "geosite-ru-blocked", "server": "remote-dns"},
+            {"rule_set": ["geosite-tld-ru", "geosite-category-ru"], "server": "direct-dns"}
+        ],
+        "final": "remote-dns",
+        "strategy": "prefer_ipv4"
+    },
+    "inbounds": [
+        {
+            "type": "tun",
+            "tag": "tun-in",
+            "interface_name": "tun0",
+            "address": ["172.19.0.1/30"],
+            "auto_route": True,
+            "strict_route": False
+        },
+        {
+            "type": "direct",
+            "tag": "dns-in",
+            "listen": "0.0.0.0",
+            "listen_port": 53
+        }
+    ],
+    "outbounds": final_outbounds,
+    "route": {
+        "default_domain_resolver": "direct-dns",
+        "rule_set": [
+            {
+                "tag": "adguard-dns",
+                "type": "local",
+                "format": "binary",
+                "path": "/var/lib/sing-box/rules/adguard-dns.srs"
+            },
+            {
+                "tag": "geosite-category-ai",
+                "type": "local",
+                "format": "binary",
+                "path": "/var/lib/sing-box/rules/geosite-category-ai.srs"
+            },
+            {
+                "tag": "geosite-ru-blocked",
+                "type": "local",
+                "format": "binary",
+                "path": "/var/lib/sing-box/rules/geosite-ru-blocked.srs"
+            },
+            {
+                "tag": "geosite-tld-ru",
+                "type": "local",
+                "format": "binary",
+                "path": "/var/lib/sing-box/rules/geosite-tld-ru.srs"
+            },
+            {
+                "tag": "geosite-category-ru",
+                "type": "local",
+                "format": "binary",
+                "path": "/var/lib/sing-box/rules/geosite-category-ru.srs"
+            },
+            {
+                "tag": "geoip-ru",
+                "type": "local",
+                "format": "binary",
+                "path": "/var/lib/sing-box/rules/geoip-ru.srs"
+            }
+        ],
+        "rules": [
+            {"action": "sniff"},
+            {"inbound": "dns-in", "action": "hijack-dns"},
+            {"protocol": "bittorrent", "outbound": "Torrent"},
+            {"ip_is_private": True, "outbound": "direct"},
+            {"rule_set": "adguard-dns", "action": "reject", "method": "drop"},
+            {"rule_set": "geosite-category-ai", "outbound": "🤖 Нейросети"},
+            {"rule_set": "geosite-ru-blocked", "outbound": main_selector},
+            {"rule_set": ["geosite-tld-ru", "geosite-category-ru"], "outbound": "direct"},
+            {"rule_set": "geoip-ru", "outbound": "direct"}
+        ],
+        "final": main_selector,
+        "auto_detect_interface": True
+    },
+    "experimental": {
+        "clash_api": {
+            "external_controller": "127.0.0.1:9090",
+            "external_ui": "/var/lib/sing-box/ui"
+        }
+    }
+}
+
+os.makedirs("/etc/sing-box", exist_ok=True)
+with open("/etc/sing-box/config.json", "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+
+subprocess.run(["rc-service", "sing-box", "restart"], check=False)
+print("sing-box configuration updated and reloaded.")

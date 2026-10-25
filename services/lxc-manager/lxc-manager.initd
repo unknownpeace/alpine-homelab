@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+name="lxc-manager"
+description="LXC Sandbox Web Manager"
+supervisor="supervise-daemon"
+command="/usr/bin/python3"
+command_args="/opt/lxc-manager/app.py"
+directory="/opt/lxc-manager"
+respawn_delay=2
+respawn_max=5
+
+depend() {
+    need net
+    after firewall caddy
+}
