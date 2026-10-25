@@ -20,10 +20,11 @@ smbpasswd -e "$AUTH_USER" 2>/dev/null || true
 cat << EOF > /etc/samba/smb.conf
 [global]
     workgroup = WORKGROUP
+    netbios name = HOMELAB
     server string = Homelab Baremetal Appliance
     server role = standalone server
     security = user
-    map to guest = Bad User
+    map to guest = Never
     dns proxy = no
     log file = /var/log/samba/%m.log
     max log size = 50
@@ -31,7 +32,12 @@ cat << EOF > /etc/samba/smb.conf
     printing = bsd
     printcap name = /dev/null
     disable spoolss = yes
-    min protocol = SMB2
+    server min protocol = SMB2_10
+    server max protocol = SMB3
+    server signing = auto
+    smb encrypt = auto
+    ea support = yes
+    vfs objects = streams_xattr
 
 [Storage]
     path = $STORAGE_BASE
@@ -70,7 +76,9 @@ EOF
 rc-update add samba default >/dev/null 2>&1 || true
 rc-service samba restart >/dev/null 2>&1 || true
 
-echo "WSDD_OPTS=\"-i $PHYSICAL_IF -n HOMELAB -w WORKGROUP\"" > /etc/conf.d/wsdd
+wsdd_if="${PHYSICAL_IF:-br0}"
+[ -d /sys/class/net/br0 ] && wsdd_if="br0"
+echo "WSDD_OPTS=\"-i $wsdd_if -n HOMELAB -w WORKGROUP -p -4\"" > /etc/conf.d/wsdd
 rc-update add wsdd default >/dev/null 2>&1 || true
 rc-service wsdd restart >/dev/null 2>&1 || true
 

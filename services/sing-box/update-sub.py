@@ -398,10 +398,15 @@ predefined_hosts = {
     f"proxy.{BASE_DOMAIN}": IP_HOST,
     f"lxc.{BASE_DOMAIN}": IP_HOST,
     f"adguard.{BASE_DOMAIN}": IP_HOST,
-    f"homelab.{BASE_DOMAIN}": IP_HOST
+    f"homelab.{BASE_DOMAIN}": IP_HOST,
+    "homelab": IP_HOST,
+    "homelab.lan": IP_HOST
 }
 
-dns_rules = [{"domain_suffix": [f".{BASE_DOMAIN}"], "server": "hosts-lan"}]
+dns_rules = [
+    {"domain": ["homelab", "homelab.lan"], "server": "hosts-lan"},
+    {"domain_suffix": [f".{BASE_DOMAIN}"], "server": "hosts-lan"}
+]
 if not ADGUARD_ENABLED:
     dns_rules.append({"rule_set": "adguard-dns", "action": "reject"})
 dns_rules.extend([
