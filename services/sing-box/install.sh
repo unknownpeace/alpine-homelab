@@ -65,6 +65,13 @@ SINGBOX_DNS_PORT="53"
 if [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
     SINGBOX_DNS_PORT="5353"
     log_info "AdGuard Home enabled: assigning sing-box DNS to internal port 5353..."
+else
+    if rc-service adguardhome status >/dev/null 2>&1; then
+        log_info "Stopping adguardhome to release port 53 for sing-box DNS engine..."
+        rc-service adguardhome stop >/dev/null 2>&1 || true
+        rc-update del adguardhome default >/dev/null 2>&1 || true
+        remove_caddy_snippet "adguardhome"
+    fi
 fi
 
 log_info "Compiling sing-box routing tables and DNS mapping (*.$BASE_DOMAIN)..."
