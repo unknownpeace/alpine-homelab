@@ -446,8 +446,7 @@ config = {
         ],
         "rules": dns_rules,
         "final": "remote-dns",
-        "strategy": "prefer_ipv4",
-        "independent_cache": True
+        "strategy": "prefer_ipv4"
     },
     "inbounds": [
         {
@@ -526,6 +525,11 @@ config = {
         "auto_detect_interface": True
     },
     "experimental": {
+        "cache_file": {
+            "enabled": True,
+            "path": "/var/lib/sing-box/cache.db",
+            "store_dns": True
+        },
         "clash_api": {
             "external_controller": "127.0.0.1:9090",
             "external_ui": "/var/lib/sing-box/ui"
