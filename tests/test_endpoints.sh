@@ -1,9 +1,16 @@
 #!/bin/sh
 # Zero-Docker Alpine Homelab - Rapid Endpoint Health Check
+for p in /opt/homelab/config.env "$(dirname "$0")/../config.env"; do
+    if [ -f "$p" ]; then
+        # shellcheck disable=SC1090
+        . "$p"
+        break
+    fi
+done
 AUTH_USER="${AUTH_USER:-admin}"
 AUTH_PASS="${AUTH_PASS:-admin}"
 BASE_DOMAIN="${BASE_DOMAIN:-lan}"
-HOST_IP="${HOST_IP:-127.0.0.1}"
+HOST_IP="${IP_HOST:-127.0.0.1}"
 
 echo "=== DNS RESOLUTION ==="
 for prefix in vault git matrix music torrent ytdl proxy lxc adguard; do

@@ -9,13 +9,17 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 log_info "Configuring nftables firewall and NAT rules..."
 
 if [ "${GATEWAY_MODE:-yes}" = "yes" ]; then
+    extra_masq=""
+    if [ -n "$PHYSICAL_IF" ] && [ "$PHYSICAL_IF" != "br0" ]; then
+        extra_masq="        oifname \"$PHYSICAL_IF\" masquerade"
+    fi
 cat << EOF > /etc/nftables.nft
 table inet homelab {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
         oifname != "lxcbr0" ip saddr 10.0.3.0/24 masquerade
-        oifname "$PHYSICAL_IF" masquerade
         oifname "br0" masquerade
+$extra_masq
     }
     chain forward {
         type filter hook forward priority filter; policy accept;

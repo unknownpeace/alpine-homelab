@@ -41,6 +41,9 @@ usage() {
     echo "  status             Show quick summary of running services and resources"
     echo "  backup [dir]       Create atomic disaster recovery backup of DBs & configs"
     echo "  restore <file>     Restore full homelab state from a backup archive"
+    echo "  ip                 Display host network addresses and interface info"
+    echo "  cert               Show root CA certificate details and install instructions"
+    echo "  mode [gw|srv]      Switch between Home Gateway and Standalone mode"
     echo "  proxy [node|url]   Update sing-box outbound proxy/subscription or refresh"
     echo "  tailscale <act>    Manage Tailscale Zero-Trust mesh VPN (up, down, status)"
     echo "  service <act> <svc> Manage a service (start, stop, restart, status, logs)"
@@ -544,6 +547,83 @@ cmd_tailscale() {
     esac
 }
 
+cmd_ip() {
+    echo -e "${C_CYAN}${C_BOLD}Host Network Configuration:${C_RESET}"
+    echo "  Primary IP     : $IP_HOST"
+    echo "  Default Gateway: $DEFAULT_GW"
+    echo "  Interface      : $PHYSICAL_IF"
+    echo "  Base Domain    : *.$BASE_DOMAIN"
+    echo "  DNS Resolver   : $IP_HOST:53"
+}
+
+cmd_cert() {
+    local cert_file="/root/caddy-homelab-root.crt"
+    if [ ! -f "$cert_file" ]; then
+        cert_file="/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt"
+    fi
+    if [ -f "$cert_file" ]; then
+        log_success "Root CA Certificate found: $cert_file"
+        echo ""
+        echo "Download via Browser: https://homelab.lan/caddy-homelab-root.crt (or https://$IP_HOST/caddy-homelab-root.crt)"
+        if command -v openssl >/dev/null 2>&1; then
+            echo "Fingerprint (SHA256):"
+            openssl x509 -noout -fingerprint -sha256 -in "$cert_file" 2>/dev/null || true
+        fi
+        echo ""
+        echo "Installation instructions for Green HTTPS:"
+        echo "  - Windows : Double-click .crt -> 'Install Certificate' -> Local Machine -> 'Trusted Root Certification Authorities'"
+        echo "  - macOS   : Keychain Access -> System -> Drag & drop -> 'Always Trust'"
+        echo "  - Android : Settings -> Security -> Install Certificate -> CA Certificate"
+        echo "  - iOS/iPad: AirDrop / Safari download -> Settings -> Profile Downloaded -> General -> About -> Certificate Trust Settings"
+    else
+        log_error "Root CA certificate not found at $cert_file"
+    fi
+}
+
+cmd_mode() {
+    check_root
+    local new_mode="${1:-status}"
+    case "$new_mode" in
+        gateway|gw)
+            log_info "Switching network mode to Transparent Home Gateway (masquerade + forward active)..."
+            if [ -f "$ROOT_DIR/config.env" ]; then
+                if grep -q "^GATEWAY_MODE=" "$ROOT_DIR/config.env"; then
+                    sed -i 's|^GATEWAY_MODE=.*|GATEWAY_MODE="yes"|' "$ROOT_DIR/config.env"
+                else
+                    echo 'GATEWAY_MODE="yes"' >> "$ROOT_DIR/config.env"
+                fi
+            fi
+            export GATEWAY_MODE="yes"
+            sh "$ROOT_DIR/core/05-firewall.sh"
+            log_success "Gateway mode active. Set devices' Default Gateway and DNS to $IP_HOST."
+            ;;
+        standalone|server|srv)
+            log_info "Switching network mode to Standalone Host (forwarding disabled)..."
+            if [ -f "$ROOT_DIR/config.env" ]; then
+                if grep -q "^GATEWAY_MODE=" "$ROOT_DIR/config.env"; then
+                    sed -i 's|^GATEWAY_MODE=.*|GATEWAY_MODE="no"|' "$ROOT_DIR/config.env"
+                else
+                    echo 'GATEWAY_MODE="no"' >> "$ROOT_DIR/config.env"
+                fi
+            fi
+            export GATEWAY_MODE="no"
+            sh "$ROOT_DIR/core/05-firewall.sh"
+            log_success "Standalone mode active. Host services only."
+            ;;
+        status|"")
+            echo "Current Gateway Mode: ${GATEWAY_MODE:-yes}"
+            if [ "${GATEWAY_MODE:-yes}" = "yes" ]; then
+                echo "  Type: Transparent Home Gateway (routes other devices via $IP_HOST)"
+            else
+                echo "  Type: Standalone Server (services only on this host)"
+            fi
+            ;;
+        *)
+            echo "Usage: homelab mode <gateway|standalone|status>"
+            ;;
+    esac
+}
+
 cmd_proxy() {
     check_root
     local input="$*"
@@ -594,6 +674,15 @@ case "$CMD" in
         ;;
     restore)
         cmd_restore "$@"
+        ;;
+    ip)
+        cmd_ip "$@"
+        ;;
+    cert|ca|ssl)
+        cmd_cert "$@"
+        ;;
+    mode)
+        cmd_mode "$@"
         ;;
     tailscale)
         cmd_tailscale "$@"
