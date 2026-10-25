@@ -1538,6 +1538,7 @@ def index():
     return INDEX_HTML
 
 if __name__ == "__main__":
+    import bottle
     from socketserver import ThreadingMixIn
     from wsgiref.simple_server import WSGIServer, make_server
 
