@@ -19,16 +19,7 @@ apk add --no-cache \
     tzdata alpine-conf \
     nftables nftables-openrc \
     python3 py3-requests py3-bottle \
-    lxc lxc-openrc lxc-templates lxc-download bridge rsync ttyd \
-    sqlite git \
-    caddy caddy-openrc \
-    vaultwarden vaultwarden-openrc vaultwarden-web-vault \
-    forgejo forgejo-openrc \
-    conduit conduit-openrc \
-    navidrome navidrome-openrc ffmpeg \
-    transmission-daemon transmission-daemon-openrc \
-    samba-server samba-server-openrc samba-common-tools \
-    wsdd wsdd-openrc
+    bridge sqlite git
 
 # Apply system timezone if configured
 if [ -n "$TIMEZONE" ]; then

@@ -10,6 +10,10 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 
 log_info "Deploying Caddy 2 Reverse Proxy and Local PKI CA (Base domain: *.$BASE_DOMAIN)..."
 
+if ! command -v caddy >/dev/null 2>&1; then
+    apk add --no-cache caddy caddy-openrc
+fi
+
 setcap cap_net_bind_service=+ep /usr/sbin/caddy 2>/dev/null || true
 
 RAW_HASH=$(caddy hash-password --plaintext "$AUTH_PASS")

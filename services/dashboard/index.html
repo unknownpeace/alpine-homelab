@@ -79,7 +79,7 @@
                 <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-xl text-amber-400">⚡</div>
                 <div>
                     <div class="text-xs text-slate-400 font-medium">Потребление RAM</div>
-                    <div class="text-sm font-semibold font-mono text-slate-200">~450 MB (Всего)</div>
+                    <div class="text-sm font-semibold font-mono text-slate-200" id="stat-ram">~180 MB (Минимум)</div>
                 </div>
             </div>
         </section>
@@ -96,7 +96,7 @@
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" id="services-grid">
                 
                 <!-- Vaultwarden -->
-                <a href="https://vault.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://vault.lan" target="_blank" data-service="vaultwarden" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">🔐</span>
@@ -112,7 +112,7 @@
                 </a>
 
                 <!-- Forgejo Git -->
-                <a href="https://git.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://git.lan" target="_blank" data-service="forgejo" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">🐙</span>
@@ -128,7 +128,7 @@
                 </a>
 
                 <!-- LXC Sandbox Manager -->
-                <a href="https://lxc.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://lxc.lan" target="_blank" data-service="lxc" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">📦</span>
@@ -144,7 +144,7 @@
                 </a>
 
                 <!-- sing-box Metacubexd -->
-                <a href="https://proxy.lan/ui/" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://proxy.lan/ui/" target="_blank" data-service="singbox" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">⚡</span>
@@ -160,7 +160,7 @@
                 </a>
 
                 <!-- Navidrome Music -->
-                <a href="https://music.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://music.lan" target="_blank" data-service="navidrome" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">🎵</span>
@@ -176,7 +176,7 @@
                 </a>
 
                 <!-- Transmission -->
-                <a href="https://torrent.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://torrent.lan" target="_blank" data-service="transmission" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">📥</span>
@@ -192,7 +192,7 @@
                 </a>
 
                 <!-- Media Downloader yt-dlp -->
-                <a href="https://ytdl.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://ytdl.lan" target="_blank" data-service="ytdlp" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">🎬</span>
@@ -208,7 +208,7 @@
                 </a>
 
                 <!-- Conduit Matrix -->
-                <a href="https://matrix.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                <a href="https://matrix.lan" target="_blank" data-service="conduit" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">💬</span>
@@ -223,8 +223,24 @@
                     </div>
                 </a>
 
+                <!-- AdGuard Home -->
+                <a href="https://adguard.lan" target="_blank" data-service="adguardhome" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">🛡️</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">DNS AdBlock :3001</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">AdGuard Home</h3>
+                        <p class="text-xs text-slate-400 mt-1">Сетевая блокировка рекламы, трекеров, DoH/DoT и родительский контроль.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>adguard.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
                 <!-- Samba Network Shares -->
-                <div class="group bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                <div data-service="samba" class="group bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
                     <div>
                         <div class="flex items-center justify-between mb-3">
                             <span class="text-2xl">📁</span>
@@ -269,7 +285,22 @@
         Alpine Linux 3.24 &bull; OpenRC Supervised &bull; Zero-Docker Homelab
     </footer>
 
+    <script src="env-config.js"></script>
     <script>
+        // Filter visible service cards based on deployed configuration
+        if (window.__HOMELAB_CONFIG__) {
+            document.querySelectorAll('[data-service]').forEach(card => {
+                const svc = card.getAttribute('data-service');
+                if (window.__HOMELAB_CONFIG__[svc] !== 'yes') {
+                    card.style.display = 'none';
+                }
+            });
+            if (window.__HOMELAB_CONFIG__.ram_estimate) {
+                const ramEl = document.getElementById('stat-ram');
+                if (ramEl) ramEl.textContent = window.__HOMELAB_CONFIG__.ram_estimate;
+            }
+        }
+
         // Dynamically detect base domain and host IP from current window location
         const host = window.location.hostname;
         const parts = host.split('.');

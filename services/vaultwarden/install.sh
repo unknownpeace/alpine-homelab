@@ -10,6 +10,10 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 
 log_info "Configuring Vaultwarden on 127.0.0.1:8000 (Domain: https://vault.$BASE_DOMAIN)..."
 
+if ! command -v vaultwarden >/dev/null 2>&1; then
+    apk add --no-cache vaultwarden vaultwarden-openrc vaultwarden-web-vault
+fi
+
 cat << EOF > /etc/conf.d/vaultwarden
 ROCKET_ADDRESS=127.0.0.1
 ROCKET_PORT=8000

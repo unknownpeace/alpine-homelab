@@ -10,6 +10,10 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 
 log_info "Configuring Transmission on 127.0.0.1:9091 (Downloads: $STORAGE_BASE/downloads)..."
 
+if ! command -v transmission-daemon >/dev/null 2>&1; then
+    apk add --no-cache transmission-daemon transmission-daemon-openrc
+fi
+
 mkdir -p /var/lib/transmission/config "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete"
 cat << EOF > /var/lib/transmission/config/settings.json
 {

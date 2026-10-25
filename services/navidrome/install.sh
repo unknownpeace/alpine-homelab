@@ -10,6 +10,10 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 
 log_info "Configuring Navidrome Music Server on 127.0.0.1:4533 (Music: $STORAGE_BASE/music)..."
 
+if ! command -v navidrome >/dev/null 2>&1; then
+    apk add --no-cache navidrome navidrome-openrc ffmpeg
+fi
+
 mkdir -p /etc/navidrome /var/lib/navidrome "$STORAGE_BASE/music"
 cat << EOF > /etc/navidrome/navidrome.toml
 MusicFolder = "$STORAGE_BASE/music"
