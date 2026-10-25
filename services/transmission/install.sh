@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 log_info "Configuring Transmission on 127.0.0.1:9091 (Downloads: $STORAGE_BASE/downloads)..."
 
 if ! command -v transmission-daemon >/dev/null 2>&1; then
-    apk_add transmission-daemon transmission-daemon-openrc
+    apk_add transmission-daemon transmission-remote transmission-daemon-openrc
 fi
 
 addgroup transmission media 2>/dev/null || true
@@ -107,7 +107,7 @@ if [ -f "\$TARGET_PATH" ]; then
         *.flac|*.FLAC|*.mp3|*.MP3|*.opus|*.OPUS|*.m4a|*.M4A|*.ogg|*.OGG|*.wav|*.WAV|*.alac) HAS_AUDIO=1 ;;
     esac
 elif [ -d "\$TARGET_PATH" ]; then
-    if find "\$TARGET_PATH" -type f \\( -iname "*.flac" -o -iname "*.mp3" -o -iname "*.opus" -o -iname "*.m4a" -o -iname "*.ogg" -o -iname "*.wav" \\) -quit 2>/dev/null | grep -q .; then
+    if find "\$TARGET_PATH" -type f \\( -iname "*.flac" -o -iname "*.mp3" -o -iname "*.opus" -o -iname "*.m4a" -o -iname "*.ogg" -o -iname "*.wav" \\) -print -quit 2>/dev/null | grep -q .; then
         HAS_AUDIO=1
     fi
 fi
@@ -138,14 +138,7 @@ chown transmission:media /etc/transmission/torrent-done.sh
 # Deploy weekly blocklist update script
 cat << EOF > /etc/periodic/weekly/transmission-blocklist
 #!/bin/sh
-set -eu
-SESSION_ID=\$(curl -sI -u $AUTH_USER:$AUTH_PASS http://127.0.0.1:9091/transmission/rpc 2>/dev/null | awk -F': ' '/X-Transmission-Session-Id/ {gsub(/\\r/,"",\$2); print \$2}' || true)
-if [ -n "\$SESSION_ID" ]; then
-    curl -s -u $AUTH_USER:$AUTH_PASS -X POST http://127.0.0.1:9091/transmission/rpc \\
-        -H "X-Transmission-Session-Id: \${SESSION_ID}" \\
-        -H "Content-Type: application/json" \\
-        -d '{"method":"blocklist-update"}' >/dev/null 2>&1 || true
-fi
+transmission-remote 127.0.0.1:9091 -n "$AUTH_USER:$AUTH_PASS" --blocklist-update >/dev/null 2>&1 || true
 EOF
 chmod 755 /etc/periodic/weekly/transmission-blocklist
 
