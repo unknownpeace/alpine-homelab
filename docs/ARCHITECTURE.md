@@ -1,70 +1,78 @@
 # Архитектура Zero-Docker Alpine Homelab Appliance
 
-Данный комплекс представляет собой эталонный автономный программный комплекс микросервисов для домашнего сервера или умного шлюза, построенный исключительно на базе **Alpine Linux 3.24** и легковесных контейнеров **LXC** под управлением **OpenRC**. 
+Данный комплекс представляет собой эталонный автономный программный комплекс микросервисов для домашнего сервера или умного шлюза, построенный исключительно на базе **Alpine Linux 3.24** с нативной супервизией **OpenRC** и встроенной песочницей изолированных Linux-контейнеров **LXC**.
 
-Никакого Docker, Podman, systemd или тяжелых слоев виртуализации. Потребление оперативной памяти для всей системы из 8 изолированных контейнеров составляет **менее 500 МБ RAM**.
+Никакого Docker, Podman, systemd или тяжелых слоев виртуализации. Потребление оперативной памяти для всего комплекса из 11 сервисов составляет **менее 450 МБ RAM**.
 
 ---
 
 ## 1. Топология сети и адресация
 
-Все контейнеры подключены к единому сетевому мосту хоста `br0`, работающему в режиме L2-бриджа поверх основного физического интерфейса хоста (`eth0`).
+Все сервисы хоста работают в едином оптимизированном сетевом пространстве с высокопроизводительным стеком Linux (TCP BBR + FQ, MSS Clamping, nftables NAT).
 
 ```mermaid
 flowchart TD
-    WAN["Интернет / Провайдер"] --> HOST["Alpine Linux Host (testlab)\nIP: 192.168.1.147\nМост: br0 (eth0)\nTCP BBR + sysctl"]
+    WAN["Интернет / Провайдер"] --> HOST["Alpine Linux Appliance (HOMELAB)\nIP: IP_HOST (br0)\nTCP BBR + sysctl + nftables NAT"]
     
-    subgraph LAN ["Локальная сеть (192.168.1.0/24)"]
-        CLIENTS["Клиенты (ПК, Смартфоны)\nDNS: 192.168.1.137\nШлюз: 192.168.1.140"]
+    subgraph LAN ["Локальная сеть (*.lan / IP_HOST)"]
+        CLIENTS["Клиенты (ПК, ТВ, Смартфоны)\nШлюз: IP_HOST\nDNS: IP_HOST:53"]
         
-        CADDY["caddybox (192.168.1.51)\nCaddy 2 Reverse Proxy\nHTTPS 443 (Local PKI)\nSmart Redir (/ui, /web)"]
-        ADGUARD["adguardbox (192.168.1.137)\nAdGuard Home DoH/DoT :53\nFilter 7 (RU) + Wildcard *.lan"]
-        PROXY["proxybox (192.168.1.140)\nsing-box 1.14 TUN\nRuNet Direct + VLESS"]
+        CADDY["Caddy 2 Reverse Proxy (:443)\nLocal PKI Root CA\nHTTPS на *.lan и IP"]
+        SINGBOX["sing-box 1.14 TUN (:53 / :5353)\nУмный RuNet маршрутизатор\nMetacubexd Web UI (:9090)"]
         
-        VAULT["vaultbox (192.168.1.100)\nVaultwarden :8000\nPasskeys & WebAuthn"]
-        GIT["gitbox (192.168.1.132)\nForgejo Git :3000\nROOT_URL git.lan"]
-        MATRIX["matrixbox (192.168.1.93)\nConduit Matrix :6167\nRocksDB v18"]
-        MEDIA["mediabox (192.168.1.150)\nSamba 4 + WSDD\nNavidrome + Transmission"]
-        YTDL["ytdlbox (192.168.1.155)\nPython 3 Downloader :8080\n(Шлюз: 192.168.1.140)"]
+        VAULT["Vaultwarden (:8000)\nМенеджер паролей (vault.lan)"]
+        GIT["Forgejo Git (:3000, SSH: 2222)\nGit репозитории (git.lan)"]
+        MATRIX["Conduit Matrix (:6167)\nМессенджер (matrix.lan)"]
+        NAVI["Navidrome Music (:4533)\nСтриминг аудио (music.lan)"]
+        TRANS["Transmission (:9091)\nТоррент-клиент (torrent.lan)"]
+        YTDL["yt-dlp Downloader (:8080)\nВеб-загрузчик медиа (ytdl.lan)"]
+        SAMBA["Samba 4 + WSDD (:445)\nСетевые папки Windows (HOMELAB)"]
+        LXC["LXC Sandbox Manager (:8888)\nПесочницы + Web Shell ttyd (:7681) (lxc.lan)"]
     end
 
     HOST --> CADDY
-    HOST --> ADGUARD
-    HOST --> PROXY
+    HOST --> SINGBOX
     HOST --> VAULT
     HOST --> GIT
     HOST --> MATRIX
-    HOST --> MEDIA
+    HOST --> NAVI
+    HOST --> TRANS
     HOST --> YTDL
+    HOST --> SAMBA
+    HOST --> LXC
 
-    CLIENTS -->|DNS Запросы| ADGUARD
+    CLIENTS -->|DNS Запросы :53| SINGBOX
     CLIENTS -->|HTTPS Запросы *.lan| CADDY
-    CLIENTS -->|Шлюз / Интернет| PROXY
+    CLIENTS -->|SMB Папки \\HOMELAB\Storage| SAMBA
+    CLIENTS -->|Прозрачный шлюз NAT| HOST
     
     CADDY -->|Reverse Proxy :8000| VAULT
     CADDY -->|Reverse Proxy :3000| GIT
     CADDY -->|Reverse Proxy :6167| MATRIX
-    CADDY -->|Reverse Proxy :4533| MEDIA
-    CADDY -->|Reverse Proxy :9091| MEDIA
+    CADDY -->|Reverse Proxy :4533| NAVI
+    CADDY -->|Reverse Proxy :9091| TRANS
     CADDY -->|Reverse Proxy :8080| YTDL
-    CADDY -->|Reverse Proxy :9090| PROXY
-    CADDY -->|Reverse Proxy :3000| ADGUARD
+    CADDY -->|Reverse Proxy :9090| SINGBOX
+    CADDY -->|Reverse Proxy :8888| LXC
 ```
 
 ---
 
-## 2. Спецификация микросервисов
+## 2. Спецификация сервисов
 
-| Контейнер | IP | Роль | Внутренние порты | Доменное имя (HTTPS) | Авторизация |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`caddybox`** | `192.168.1.51` | Шлюз TLS, Local PKI, Редиректы | 80, 443 | `*.lan` | — |
-| **`adguardbox`** | `192.168.1.137` | DoH/DoT DNS + RU AdBlock | 53 (DNS), 3000 (UI) | `https://adguard.lan/` | Basic Auth |
-| **`proxybox`** | `192.168.1.140` | sing-box 1.14 TUN + Metacubexd | 9090 (API/UI), 172.19.0.1 (tun) | `https://proxy.lan/` (-> `/ui/`) | Basic Auth |
-| **`vaultbox`** | `192.168.1.100` | Vaultwarden (FIDO2/Passkeys) | 8000 (HTTP) | `https://vault.lan/` | Внутренняя учетка |
-| **`gitbox`** | `192.168.1.132` | Git-сервер Forgejo | 3000 (HTTP), 22 (SSH) | `https://git.lan/` | Внутренняя учетка |
-| **`matrixbox`** | `192.168.1.93` | Федеративный мессенджер Conduit | 6167 (HTTP) | `https://matrix.lan/` | Внутренняя учетка |
-| **`mediabox`** | `192.168.1.150` | Музыка, Торренты, Samba, WSDD | 445 (SMB), 4533 (Navidrome), 9091 (Transmission) | `https://music.lan/`<br>`https://torrent.lan/` (-> `/web/`) | Samba: admin / пароль<br>Transmission: Basic Auth |
-| **`ytdlbox`** | `192.168.1.155` | Загрузчик видео/аудио через прокси | 8080 (HTTP) | `https://ytdl.lan/` | Basic Auth |
+| Сервис | Порт (Хост) | Роль | Доменное имя (HTTPS) | Авторизация |
+| :--- | :--- | :--- | :--- | :--- |
+| **Caddy 2** | `80`, `443` | Шлюз TLS, Local PKI CA, Редиректы | `homelab.lan`, `*.lan` | — |
+| **sing-box** | `53` (DNS), `9090` | TUN Transparent Proxy + DNS Engine + Metacubexd | `proxy.lan` | Basic Auth |
+| **LXC Manager** | `8888` (API), `7681` (ttyd) | Менеджер песочниц Linux + Web Terminal | `lxc.lan` | Basic Auth |
+| **Vaultwarden** | `8000` | Менеджер паролей Bitwarden | `vault.lan` | Внутренняя учетка |
+| **Forgejo** | `3000` (HTTP), `2222` (SSH) | Git-сервер (SQLite) | `git.lan` | Внутренняя учетка |
+| **Conduit** | `6167` | Федеративный мессенджер Matrix | `matrix.lan` | Внутренняя учетка |
+| **Navidrome** | `4533` | Музыкальный стриминг-сервер (Subsonic) | `music.lan` | Внутренняя учетка |
+| **Transmission**| `9091` | BitTorrent клиент | `torrent.lan` | Basic Auth |
+| **Media Downloader**| `8080` | yt-dlp загрузчик медиафайлов | `ytdl.lan` | Basic Auth |
+| **Samba / WSDD**| `445`, `139`, `3702` | Сетевые папки Windows/Mac + WSDD Discovery | `\\HOMELAB\Storage` | admin / пароль |
+| **AdGuard Home**| `53` (DNS), `3001` (UI) | Опциональный DNS-блокировщик рекламы | `adguard.lan` | Basic Auth |
 
 ---
 

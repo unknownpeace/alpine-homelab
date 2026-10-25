@@ -14,11 +14,23 @@ if ! command -v forgejo >/dev/null 2>&1; then
     apk_add forgejo forgejo-openrc
 fi
 
-mkdir -p /etc/forgejo /var/lib/forgejo/data
+addgroup forgejo media 2>/dev/null || true
+
+mkdir -p /etc/forgejo /var/lib/forgejo/data /var/log/forgejo
+chown -R forgejo:forgejo /var/log/forgejo 2>/dev/null || true
+
 cat << EOF > /etc/forgejo/app.ini
 APP_NAME = Homelab Git
 RUN_USER = forgejo
 RUN_MODE = prod
+
+[log]
+MODE = file
+LEVEL = Info
+ROOT_PATH = /var/log/forgejo
+
+[log.file]
+FILE_NAME = forgejo.log
 
 [server]
 DOMAIN = git.$BASE_DOMAIN

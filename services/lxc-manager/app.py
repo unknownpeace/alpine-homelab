@@ -35,6 +35,7 @@ CACHE_DIR = "/var/cache/lxc"
 MINIROOTFS_CACHE = os.path.join(LXC_DIR, "cache", "alpine-minirootfs.tar.gz")
 CATALOG_CACHE_FILE = os.path.join(LXC_DIR, "cache", "upstream-catalog.json")
 CADDY_CONF_DIR = "/etc/caddy/conf.d"
+PORT_FORWARDS_FILE = "/etc/lxc/port-forwards.json"
 
 UPSTREAM_INDEX_URL = "https://images.linuxcontainers.org/meta/1.0/index-system"
 FALLBACK_INDEX_URL = "https://uk.images.linuxcontainers.org/meta/1.0/index-system"
@@ -114,6 +115,78 @@ def reload_caddy():
             run_cmd(["rc-service", "caddy", "reload"])
         return code == 0
     return False
+
+def get_host_ip():
+    ip = os.environ.get("IP_HOST", "")
+    if ip:
+        return ip
+    for env_path in ["/opt/homelab/config.env", "/etc/homelab/config.env"]:
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("IP_HOST="):
+                            return line.split("=", 1)[1].strip().strip('"\'')
+            except Exception:
+                pass
+    try:
+        code, out, _ = run_cmd(["ip", "-4", "route", "show", "default"])
+        if out:
+            m_dev = re.search(r"dev\s+([^\s]+)", out)
+            if m_dev:
+                dev = m_dev.group(1)
+                code, out_ip, _ = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", dev])
+                m_ip = re.search(r"inet\s+([0-9.]+)", out_ip)
+                if m_ip:
+                    return m_ip.group(1)
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+def load_port_forwards():
+    if os.path.exists(PORT_FORWARDS_FILE):
+        try:
+            with open(PORT_FORWARDS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_port_forwards(forwards):
+    os.makedirs(os.path.dirname(PORT_FORWARDS_FILE), exist_ok=True)
+    with open(PORT_FORWARDS_FILE, "w", encoding="utf-8") as f:
+        json.dump(forwards, f, indent=2, ensure_ascii=False)
+
+def apply_nft_dnat(action, host_port, container_ip, container_port, proto="tcp", comment=""):
+    host_ip = get_host_ip()
+    proto = str(proto).lower().strip()
+    protocols = ["tcp", "udp"] if proto == "both" else [proto]
+    for p in protocols:
+        if action == "add":
+            apply_nft_dnat("delete", host_port, container_ip, container_port, p)
+            cmd = ["nft", "add", "rule", "inet", "homelab", "prerouting", "ip", "daddr", host_ip, p, "dport", str(host_port), "dnat", "ip", "to", f"{container_ip}:{container_port}"]
+            if comment:
+                cmd.extend(["comment", f'"{comment}"'])
+            run_cmd(cmd)
+        elif action == "delete":
+            code, out, _ = run_cmd(["nft", "-a", "list", "chain", "inet", "homelab", "prerouting"])
+            for line in out.splitlines():
+                if f"{p} dport {host_port}" in line:
+                    m = re.search(r"handle\s+(\d+)", line)
+                    if m:
+                        handle = m.group(1)
+                        run_cmd(["nft", "delete", "rule", "inet", "homelab", "prerouting", "handle", handle])
+
+def sync_all_port_forwards():
+    forwards = load_port_forwards()
+    for item in forwards:
+        c_name = item.get("container", "")
+        c_info = parse_container_info(c_name) if c_name else {}
+        c_ip = item.get("target_ip")
+        if (not c_ip or c_ip == "-") and c_info.get("ip") and c_info["ip"] != "-":
+            c_ip = c_info["ip"].split(",")[0].strip()
+        if c_ip and c_ip != "-":
+            apply_nft_dnat("add", item["host_port"], c_ip, item["container_port"], item.get("proto", "tcp"), item.get("comment", ""))
 
 # -----------------------------------------------------------------------------
 # Catalog Synchronization
@@ -310,7 +383,8 @@ def parse_container_info(name):
         "net_mode": "nat",
         "mem_limit": "max",
         "cpu_limit": "max",
-        "routes_count": 0
+        "routes_count": 0,
+        "ports_count": 0
     }
 
     for line in out.splitlines():
@@ -383,6 +457,12 @@ def parse_container_info(name):
             data["routes_count"] = len(routes)
         except Exception:
             pass
+
+    # Count port forwards
+    try:
+        data["ports_count"] = len([p for p in load_port_forwards() if p.get("container") == name])
+    except Exception:
+        data["ports_count"] = 0
 
     return data
 
@@ -1188,6 +1268,90 @@ def api_delete_route(name, subdomain):
         except Exception as e:
             return {"success": False, "error": str(e)}
     return {"success": False, "error": "Маршрут не найден."}
+
+# -----------------------------------------------------------------------------
+# Port Forwarding (DNAT via nftables)
+# -----------------------------------------------------------------------------
+
+@app.route("/api/containers/<name>/ports", method="GET")
+def api_get_ports(name):
+    response.content_type = "application/json"
+    forwards = load_port_forwards()
+    c_forwards = [f for f in forwards if f.get("container") == name]
+    host_ip = get_host_ip()
+    return {
+        "success": True,
+        "name": name,
+        "host_ip": host_ip,
+        "ports": c_forwards
+    }
+
+@app.route("/api/containers/<name>/ports", method="POST")
+def api_create_port(name):
+    response.content_type = "application/json"
+    data = request.json or {}
+    try:
+        host_port = int(str(data.get("host_port", "")).strip())
+        container_port = int(str(data.get("container_port", "")).strip())
+    except (ValueError, TypeError):
+        return {"success": False, "error": "Укажите корректные числовые порты (1-65535)."}
+
+    proto = str(data.get("proto", "tcp")).lower().strip()
+    if proto not in ["tcp", "udp", "both"]:
+        proto = "tcp"
+
+    if host_port < 1 or host_port > 65535 or container_port < 1 or container_port > 65535:
+        return {"success": False, "error": "Порты должны быть в диапазоне 1-65535."}
+
+    reserved = [22, 53, 80, 443, 3000, 3001, 4533, 6167, 8000, 8080, 8888, 9090, 9091]
+    if host_port in reserved:
+        return {"success": False, "error": f"Порт {host_port} зарезервирован системными службами хоста."}
+
+    forwards = load_port_forwards()
+    for f in forwards:
+        if f.get("host_port") == host_port and (f.get("proto") == proto or proto == "both" or f.get("proto") == "both"):
+            return {"success": False, "error": f"Внешний порт {host_port} уже проброшен в контейнер '{f.get('container')}'."}
+
+    c_info = parse_container_info(name)
+    target_ip = None
+    if c_info.get("ip") and c_info["ip"] != "-":
+        target_ip = c_info["ip"].split(",")[0].strip()
+
+    if not target_ip:
+        return {"success": False, "error": "У контейнера нет активного IPv4 адреса. Запустите контейнер."}
+
+    comment = f"lxc_{name}_{host_port}_{container_port}"
+    apply_nft_dnat("add", host_port, target_ip, container_port, proto, comment)
+
+    forwards.append({
+        "container": name,
+        "host_port": host_port,
+        "container_port": container_port,
+        "proto": proto,
+        "target_ip": target_ip,
+        "comment": comment,
+        "created_at": int(time.time())
+    })
+    save_port_forwards(forwards)
+    return {"success": True, "message": f"Порт {host_port} успешно проброшен на {target_ip}:{container_port} ({proto.upper()})."}
+
+@app.route("/api/containers/<name>/ports/<host_port:int>", method="DELETE")
+def api_delete_port(name, host_port):
+    response.content_type = "application/json"
+    forwards = load_port_forwards()
+    target_entry = None
+    for f in forwards:
+        if f.get("container") == name and f.get("host_port") == host_port:
+            target_entry = f
+            break
+
+    if not target_entry:
+        return {"success": False, "error": "Правило проброса не найдено."}
+
+    apply_nft_dnat("delete", host_port, target_entry.get("target_ip", "0.0.0.0"), target_entry.get("container_port", host_port), target_entry.get("proto", "tcp"))
+    forwards = [f for f in forwards if not (f.get("container") == name and f.get("host_port") == host_port)]
+    save_port_forwards(forwards)
+    return {"success": True, "message": f"Проброс порта {host_port} удален."}
 
 # -----------------------------------------------------------------------------
 # Phase 3: Inline Rootfs File Explorer & Web Code Editor
@@ -2202,6 +2366,53 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- Port Forwarding (DNAT) Modal -->
+    <div id="ports-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">🔌</span>
+                    <h3 class="font-bold text-white text-sm sm:text-base">
+                        Проброс портов (DNAT): <span id="ports-target-name" class="text-amber-400 font-mono">name</span>
+                    </h3>
+                </div>
+                <button onclick="closePortsModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <!-- New Port Forward Form -->
+            <form onsubmit="handleCreatePort(event)" class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2.5 shrink-0 text-xs">
+                <span class="font-semibold text-slate-200 block">Пробросить внешний порт хоста в контейнер:</span>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-1">Порт хоста (Внешний)</label>
+                        <input type="number" id="pf-host-port-input" required min="1" max="65535" placeholder="8081" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-1">Порт контейнера</label>
+                        <input type="number" id="pf-cont-port-input" required min="1" max="65535" placeholder="80" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-1">Протокол</label>
+                        <select id="pf-proto-select" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white font-mono">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                            <option value="both">TCP + UDP</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between pt-1">
+                    <span class="text-[11px] text-slate-500 font-mono" id="pf-host-ip-hint">Хост: IP_HOST</span>
+                    <button type="submit" id="btn-port-add" class="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded text-xs transition">+ Пробросить порт</button>
+                </div>
+            </form>
+
+            <!-- Port Forwards List -->
+            <div class="flex-1 overflow-y-auto space-y-2 min-h-[140px] pr-1" id="ports-forwards-list">
+                <div class="text-center py-6 text-slate-500 text-xs">Загрузка проброшенных портов...</div>
+            </div>
+        </div>
+    </div>
+
     <!-- Inline Rootfs File Explorer Modal -->
     <div id="files-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 hidden">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-5xl h-[88vh] shadow-2xl flex flex-col overflow-hidden">
@@ -2863,6 +3074,9 @@ INDEX_HTML = """<!DOCTYPE html>
                 const ingressBadge = c.routes_count > 0 ? 
                     `<button onclick="openIngressModal('${escapeHtml(c.name)}')" class="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">${c.routes_count} домен(ов)</button>` :
                     `<button onclick="openIngressModal('${escapeHtml(c.name)}')" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">+ Ingress</button>`;
+                const portsBadge = c.ports_count > 0 ?
+                    `<button onclick="openPortsModal('${escapeHtml(c.name)}')" class="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-mono">${c.ports_count} порт(ов)</button>` :
+                    `<button onclick="openPortsModal('${escapeHtml(c.name)}')" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">+ Порты</button>`;
 
                 // Desktop Table Row
                 tableHtml += `
@@ -2889,7 +3103,7 @@ INDEX_HTML = """<!DOCTYPE html>
                                 <span>⚙️</span> ${limitsBadge}
                             </button>
                         </td>
-                        <td class="py-3 px-4">${ingressBadge}</td>
+                        <td class="py-3 px-4 flex items-center gap-1.5">${ingressBadge} ${portsBadge}</td>
                         <td class="py-3 px-4">
                             <button onclick="toggleAutostart('${escapeHtml(c.name)}')" class="text-xs px-2 py-0.5 rounded border transition ${c.autostart ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}" title="Переключить">
                                 ${c.autostart ? 'Да' : 'Нет'}
@@ -2899,6 +3113,7 @@ INDEX_HTML = """<!DOCTYPE html>
                             ${isRunning ? `
                                 <button onclick="openTermModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-emerald-950/50 hover:bg-emerald-900/80 text-emerald-300 rounded text-xs border border-emerald-800/50 transition font-medium" title="Интерактивный шелл">📟</button>
                                 <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Файлы rootfs">📁</button>
+                                <button onclick="openPortsModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-amber-950/50 hover:bg-amber-900/80 text-amber-300 rounded text-xs border border-amber-800/50 transition font-medium" title="Проброс портов (DNAT)">🔌</button>
                                 <button onclick="openExecModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Быстрый Exec">💻</button>
                                 <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-indigo-950/50 hover:bg-indigo-900/80 text-indigo-300 rounded text-xs border border-indigo-800/50 transition" title="Снимки">📸</button>
                                 <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs border border-slate-700 transition" title="Клонировать">👥</button>
@@ -2907,6 +3122,7 @@ INDEX_HTML = """<!DOCTYPE html>
                                 <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded text-xs border border-rose-800/40 transition" title="Остановить">⏹️</button>
                             ` : `
                                 <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Файлы rootfs">📁</button>
+                                <button onclick="openPortsModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-amber-950/50 hover:bg-amber-900/80 text-amber-300 rounded text-xs border border-amber-800/50 transition font-medium" title="Проброс портов (DNAT)">🔌</button>
                                 <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-indigo-950/50 hover:bg-indigo-900/80 text-indigo-300 rounded text-xs border border-indigo-800/50 transition" title="Снимки">📸</button>
                                 <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs border border-slate-700 transition" title="Клонировать">👥</button>
                                 <button onclick="exportContainer('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded text-xs border border-slate-700 transition" title="Экспорт бэкапа">📦</button>
@@ -2956,6 +3172,7 @@ INDEX_HTML = """<!DOCTYPE html>
                                 <button onclick="openTermModal('${escapeHtml(c.name)}')" class="py-2 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 rounded-lg text-xs border border-emerald-800/50 font-medium active:scale-95">📟 Шелл</button>
                                 <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700 active:scale-95">📁 Файлы</button>
                                 <button onclick="openIngressModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-blue-300 rounded-lg text-xs border border-slate-700 active:scale-95">🌐 Ingress</button>
+                                <button onclick="openPortsModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-xs border border-slate-700 active:scale-95">🔌 Порты</button>
                                 <button onclick="openLimitsModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 rounded-lg text-xs border border-slate-700 active:scale-95">⚙️ Лимиты</button>
                                 <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 rounded-lg text-xs border border-slate-700 active:scale-95">📸 Снимки</button>
                                 <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-xs border border-slate-700 active:scale-95">👥 Клон</button>
@@ -2964,6 +3181,7 @@ INDEX_HTML = """<!DOCTYPE html>
                             ` : `
                                 <button onclick="handleAction('${escapeHtml(c.name)}', 'start')" class="py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium active:scale-95">▶ Старт</button>
                                 <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700 active:scale-95">📁 Файлы</button>
+                                <button onclick="openPortsModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-xs border border-slate-700 active:scale-95">🔌 Порты</button>
                                 <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 rounded-lg text-xs border border-slate-700 active:scale-95">📸 Снимки</button>
                                 <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-xs border border-slate-700 active:scale-95">👥 Клон</button>
                                 <button onclick="exportContainer('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-xs border border-slate-700 active:scale-95">📦 Бэкап</button>
@@ -3226,6 +3444,106 @@ INDEX_HTML = """<!DOCTYPE html>
                 if (d.success) {
                     showToast(d.message, 'success');
                     await loadIngressRoutes(activeIngressTarget);
+                    refreshData();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            }
+        }
+
+        // --- Port Forwarding (DNAT) Modal ---
+        let activePortsTarget = '';
+
+        async function openPortsModal(name) {
+            activePortsTarget = name;
+            document.getElementById('ports-target-name').innerText = name;
+            document.getElementById('ports-modal').classList.remove('hidden');
+            await loadPortsList(name);
+        }
+
+        function closePortsModal() {
+            document.getElementById('ports-modal').classList.add('hidden');
+        }
+
+        async function loadPortsList(name) {
+            const listEl = document.getElementById('ports-forwards-list');
+            listEl.innerHTML = '<div class="text-center py-6 text-slate-500 text-xs">Загрузка проброшенных портов...</div>';
+
+            try {
+                const res = await fetch(`/api/containers/${name}/ports`);
+                const d = await res.json();
+                const ports = d.ports || [];
+                const hostIp = d.host_ip || 'IP_HOST';
+                const hint = document.getElementById('pf-host-ip-hint');
+                if (hint) hint.innerText = `Внешний IP хоста: ${hostIp}`;
+
+                if (ports.length === 0) {
+                    listEl.innerHTML = `
+                        <div class="text-center py-6 text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                            <div class="text-2xl mb-1">🔌</div>
+                            <div class="text-xs text-slate-400">Нет активных пробросов портов</div>
+                            <div class="text-[11px] text-slate-600 mt-1">Пробросьте порт выше для прямого доступа к сервису в контейнере</div>
+                        </div>`;
+                    return;
+                }
+
+                let html = '';
+                for (const p of ports) {
+                    html += `
+                        <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs gap-2">
+                            <div class="overflow-hidden">
+                                <div class="font-mono font-bold text-amber-300 flex items-center gap-1.5 truncate">
+                                    <span>⚡</span> <span>${hostIp}:${escapeHtml(p.host_port)}</span>
+                                    <span class="text-slate-500 text-[10px] uppercase font-sans px-1.5 py-0.2 bg-slate-900 border border-slate-800 rounded">${escapeHtml(p.proto)}</span>
+                                </div>
+                                <div class="text-slate-400 text-[11px] mt-0.5 font-mono">-> контейнер ${escapeHtml(p.target_ip)}:${escapeHtml(p.container_port)}</div>
+                            </div>
+                            <button onclick="handleDeletePort(${p.host_port}, '${escapeHtml(p.proto)}')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded border border-rose-800/40 text-[11px] transition active:scale-95 shrink-0">🗑️</button>
+                        </div>`;
+                }
+                listEl.innerHTML = html;
+            } catch (err) {
+                listEl.innerHTML = `<div class="text-rose-400 text-xs">Ошибка: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        async function handleCreatePort(e) {
+            e.preventDefault();
+            const host_port = document.getElementById('pf-host-port-input').value.trim();
+            const container_port = document.getElementById('pf-cont-port-input').value.trim();
+            const proto = document.getElementById('pf-proto-select').value;
+
+            try {
+                const res = await fetch(`/api/containers/${activePortsTarget}/ports`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ host_port, container_port, proto })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    document.getElementById('pf-host-port-input').value = '';
+                    document.getElementById('pf-cont-port-input').value = '';
+                    await loadPortsList(activePortsTarget);
+                    refreshData();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            }
+        }
+
+        async function handleDeletePort(hostPort, proto) {
+            if (!confirm(`Удалить проброс порта ${hostPort}?`)) return;
+            try {
+                const res = await fetch(`/api/containers/${activePortsTarget}/ports/${hostPort}?proto=${encodeURIComponent(proto)}`, { method: 'DELETE' });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    await loadPortsList(activePortsTarget);
                     refreshData();
                 } else {
                     showToast(d.error, 'error');
@@ -3783,5 +4101,10 @@ if __name__ == "__main__":
         def run(self, handler):
             server = make_server(self.host, self.port, handler, server_class=ThreadingWSGIServer)
             server.serve_forever()
+
+    try:
+        sync_all_port_forwards()
+    except Exception:
+        pass
 
     app.run(host="127.0.0.1", port=8888, server=ThreadedWSGIServerAdapter)

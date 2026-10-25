@@ -416,7 +416,11 @@ dns_rules.extend([
 ])
 
 config = {
-    "log": {"level": "info"},
+    "log": {
+        "level": "info",
+        "output": "/var/log/sing-box.log",
+        "timestamp": True
+    },
     "dns": {
         "servers": [
             {
@@ -494,7 +498,8 @@ config = {
                 {"action": "sniff"},
                 {"inbound": "dns-in", "action": "hijack-dns"},
                 {"protocol": "bittorrent", "outbound": "Torrent"},
-                {"ip_is_private": True, "outbound": "direct"}
+                {"ip_is_private": True, "outbound": "direct"},
+                {"ip_cidr": ["100.64.0.0/10"], "outbound": "direct"}
             ] +
             ([{"rule_set": "adguard-dns", "action": "reject", "method": "drop"}] if not ADGUARD_ENABLED else []) +
             [

@@ -14,7 +14,14 @@ if ! command -v navidrome >/dev/null 2>&1; then
     apk_add navidrome navidrome-openrc ffmpeg
 fi
 
+addgroup navidrome media 2>/dev/null || true
+
 mkdir -p /etc/navidrome /var/lib/navidrome "$STORAGE_BASE/music"
+touch /var/log/navidrome.log
+chown navidrome:media /var/log/navidrome.log 2>/dev/null || true
+chown -R "${SAFE_USER:-admin}:media" "$STORAGE_BASE/music" 2>/dev/null || true
+chmod 2775 "$STORAGE_BASE/music" 2>/dev/null || true
+
 cat << EOF > /etc/navidrome/navidrome.toml
 MusicFolder = "$STORAGE_BASE/music"
 DataFolder = "/var/lib/navidrome"
@@ -24,6 +31,8 @@ ScanSchedule = "@every 1m"
 TranscodingCacheSize = "100MB"
 SessionTimeout = "48h"
 EnableInsightsCollector = false
+LogLevel = "info"
+LogFile = "/var/log/navidrome.log"
 EOF
 
 chown -R navidrome:media /var/lib/navidrome /etc/navidrome

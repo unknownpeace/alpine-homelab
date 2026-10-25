@@ -32,6 +32,7 @@ window.__HOMELAB_CONFIG__ = {
   conduit: "${ENABLE_CONDUIT:-yes}",
   samba: "${ENABLE_SAMBA:-yes}",
   adguardhome: "${ENABLE_ADGUARD_HOME:-no}",
+  tailscale: "${ENABLE_TAILSCALE:-no}",
   ram_estimate: "$RAM_EST"
 };
 EOF

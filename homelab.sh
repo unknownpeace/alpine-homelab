@@ -48,6 +48,7 @@ usage() {
     echo "  proxy [node|url]   Update sing-box outbound proxy/subscription or refresh"
     echo "  tailscale <act>    Manage Tailscale Zero-Trust mesh VPN (up, down, status)"
     echo "  service <act> <svc> Manage a service (start, stop, restart, status, logs)"
+    echo "  logs <svc> [-f]    View real-time or recent log entries for any service"
     echo "  help               Display this help message"
     echo ""
     exit 0
@@ -318,6 +319,36 @@ cmd_doctor() {
     done
 
     echo ""
+    echo -e "${C_WHITE}Checking Storage & Media Permissions:${C_RESET}"
+    if [ -d "$STORAGE_BASE/downloads" ]; then
+        if su -s /bin/sh transmission -c "touch $STORAGE_BASE/downloads/.perm_check" 2>/dev/null; then
+            rm -f "$STORAGE_BASE/downloads/.perm_check" 2>/dev/null || true
+            echo -e "  [${C_GREEN}PASS${C_RESET}] transmission daemon has write permission in $STORAGE_BASE/downloads"
+        else
+            echo -e "  [${C_RED}FAIL${C_RESET}] transmission daemon denied write in $STORAGE_BASE/downloads"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    if [ -d "$STORAGE_BASE/music" ]; then
+        if su -s /bin/sh navidrome -c "test -r $STORAGE_BASE/music" 2>/dev/null; then
+            echo -e "  [${C_GREEN}PASS${C_RESET}] navidrome daemon has read access to $STORAGE_BASE/music"
+        else
+            echo -e "  [${C_RED}FAIL${C_RESET}] navidrome daemon cannot read $STORAGE_BASE/music"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    if [ "${ENABLE_SAMBA:-yes}" = "yes" ] && command -v testparm >/dev/null 2>&1; then
+        if testparm -s /etc/samba/smb.conf >/dev/null 2>&1; then
+            echo -e "  [${C_GREEN}PASS${C_RESET}] Samba smb.conf syntax verified (Windows NetBIOS: HOMELAB)"
+        else
+            echo -e "  [${C_RED}FAIL${C_RESET}] Samba smb.conf has syntax errors"
+            issues=$((issues + 1))
+        fi
+    fi
+
+    echo ""
     echo -e "${C_WHITE}System Resources:${C_RESET}"
     free -h | awk 'NR==2{printf "  RAM: Used %s / Total %s (Available: %s)\n", $3, $2, $7}'
     df -h / | awk 'NR==2{printf "  Disk (/): Used %s / Total %s (%s)\n", $3, $2, $5}'
@@ -342,6 +373,63 @@ cmd_status() {
     free -h
 }
 
+get_service_log_file() {
+    local svc="$1"
+    case "$svc" in
+        sing-box|singbox) echo "/var/log/sing-box.log" ;;
+        caddy) echo "/var/log/caddy/caddy.log" ;;
+        transmission|transmission-daemon) echo "/var/log/transmission/transmission.log" ;;
+        navidrome) echo "/var/log/navidrome.log" ;;
+        forgejo)
+            if [ -f "/var/log/forgejo/forgejo.log" ]; then echo "/var/log/forgejo/forgejo.log"
+            elif [ -f "/var/log/forgejo/gitea.log" ]; then echo "/var/log/forgejo/gitea.log"
+            else echo "/var/log/forgejo/http.log"
+            fi
+            ;;
+        ytdlp|ytdlp-web) echo "/var/log/ytdlp-web.log" ;;
+        lxc|lxc-manager) echo "/var/log/lxc-manager.log" ;;
+        ttyd) echo "/var/log/ttyd.log" ;;
+        adguard|adguardhome) echo "/var/log/adguardhome.log" ;;
+        conduit) echo "/var/log/conduit.log" ;;
+        samba|smbd)
+            local cand
+            cand=$(ls -t /var/log/samba/*.log 2>/dev/null | head -n1)
+            echo "${cand:-/var/log/samba/log.smbd}"
+            ;;
+        wsdd) echo "/var/log/wsdd.log" ;;
+        tailscale) echo "/var/log/messages" ;;
+        *)
+            if [ -f "/var/log/$svc.log" ]; then echo "/var/log/$svc.log"
+            elif [ -f "/var/log/$svc/$svc.log" ]; then echo "/var/log/$svc/$svc.log"
+            else echo ""
+            fi
+            ;;
+    esac
+}
+
+cmd_logs() {
+    local svc="${1:-}"
+    if [ -z "$svc" ]; then
+        echo "Usage: homelab logs <service_name> [-f] [-n <lines>]"
+        echo "Supported services: sing-box, caddy, transmission, navidrome, forgejo, ytdlp, lxc, adguard, conduit, samba, wsdd"
+        exit 1
+    fi
+    shift || true
+    local log_path
+    log_path=$(get_service_log_file "$svc")
+    if [ -n "$log_path" ] && [ -f "$log_path" ]; then
+        echo -e "${C_CYAN}=== Log stream for $svc ($log_path) ===${C_RESET}"
+        if [ "$#" -eq 0 ]; then
+            tail -n 50 "$log_path"
+        else
+            tail "$@" "$log_path"
+        fi
+    else
+        echo -e "${C_YELLOW}[!] Log file for '$svc' not found on disk ($log_path). Service status:${C_RESET}"
+        rc-service "$svc" status 2>/dev/null || true
+    fi
+}
+
 cmd_service() {
     check_root
     local act="${1:-}"
@@ -352,13 +440,8 @@ cmd_service() {
     fi
     case "$act" in
         logs)
-            if [ -f "/var/log/$svc.log" ]; then
-                tail -n 50 "/var/log/$svc.log"
-            elif [ -f "/var/log/$svc/$svc.log" ]; then
-                tail -n 50 "/var/log/$svc/$svc.log"
-            else
-                rc-service "$svc" status
-            fi
+            shift 2 || true
+            cmd_logs "$svc" "$@"
             ;;
         *)
             rc-service "$svc" "$act"
@@ -702,6 +785,9 @@ case "$CMD" in
         ;;
     service)
         cmd_service "$@"
+        ;;
+    logs|log)
+        cmd_logs "$@"
         ;;
     summary)
         cmd_summary

@@ -47,7 +47,16 @@ CIDR_PREFIX="${CIDR_PREFIX:-$(ip -4 -o addr show dev "$PHYSICAL_IF" 2>/dev/null 
 DEFAULT_GW="${DEFAULT_GW:-$(ip -4 route show default dev "$PHYSICAL_IF" 2>/dev/null | awk '{print $3; exit}')}"
 [ -z "$DEFAULT_GW" ] && DEFAULT_GW="$(ip -4 route show 2>/dev/null | grep -v 'tun' | grep -v 'lxc' | awk '/default/ {print $3; exit}')"
 [ -z "$DEFAULT_GW" ] && DEFAULT_GW="$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')"
-LAN_NETMASK="${LAN_NETMASK:-255.255.255.0}"
+
+# Dynamic Architecture Detection (x86_64 vs aarch64 / ARM)
+HOST_ARCH="$(uname -m 2>/dev/null || echo x86_64)"
+case "$HOST_ARCH" in
+    x86_64) MINIROOTFS_ARCH="x86_64"; SB_ARCH="amd64" ;;
+    aarch64|arm64) MINIROOTFS_ARCH="aarch64"; SB_ARCH="arm64" ;;
+    *) MINIROOTFS_ARCH="x86_64"; SB_ARCH="amd64" ;;
+esac
+DEFAULT_MINIROOTFS="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/${MINIROOTFS_ARCH}/alpine-minirootfs-3.24.0-${MINIROOTFS_ARCH}.tar.gz"
+MINIROOTFS_URL="${MINIROOTFS_URL:-$DEFAULT_MINIROOTFS}"
 
 # 3. Interactive Setup Wizard (Runs on first install, or when explicitly requested via 'homelab reconfigure')
 CONFIG_TARGET="/opt/homelab/config.env"
@@ -418,7 +427,7 @@ BRIDGE_ENABLE="yes"
 DNS_UPSTREAM_PRIMARY="https://dns.adguard-dns.com/dns-query"
 DNS_UPSTREAM_SECONDARY="1.1.1.1"
 PROXY_INPUT="$PROXY_INPUT"
-MINIROOTFS_URL="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz"
+MINIROOTFS_URL="$MINIROOTFS_URL"
 
 ENABLE_CADDY="$ENABLE_CADDY"
 ENABLE_DASHBOARD="${ENABLE_DASHBOARD:-yes}"
@@ -456,7 +465,7 @@ DNS_UPSTREAM_PRIMARY="${DNS_UPSTREAM_PRIMARY:-https://dns.adguard-dns.com/dns-qu
 DNS_UPSTREAM_SECONDARY="${DNS_UPSTREAM_SECONDARY:-1.1.1.1}"
 PROXY_INPUT="${PROXY_INPUT:-direct}"
 SUB_URL="$PROXY_INPUT"
-MINIROOTFS_URL="${MINIROOTFS_URL:-https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz}"
+MINIROOTFS_URL="${MINIROOTFS_URL:-$DEFAULT_MINIROOTFS}"
 
 ENABLE_CADDY="${ENABLE_CADDY:-yes}"
 ENABLE_DASHBOARD="${ENABLE_DASHBOARD:-yes}"

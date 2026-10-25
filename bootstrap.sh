@@ -29,7 +29,14 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# 1. Ensure git and curl are present on Alpine
+# 1. Ensure system clock is reasonably synchronized (prevents SSL certificate failures on dead CMOS batteries)
+CURR_YEAR=$(date +%Y 2>/dev/null || echo 1970)
+if [ "$CURR_YEAR" -lt 2025 ]; then
+    echo "[*] System clock is out of sync ($CURR_YEAR). Synchronizing via NTP..."
+    ntpd -d -q -n -p pool.ntp.org 2>/dev/null || ntpd -q -n -p time.google.com 2>/dev/null || true
+fi
+
+# 2. Ensure git and curl are present on Alpine
 if ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
     echo "[*] Installing required bootstrap dependencies (git, curl)..."
     if ! grep -q "^http.*/community" /etc/apk/repositories 2>/dev/null; then
@@ -39,7 +46,7 @@ if ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
     apk add --no-cache git curl
 fi
 
-# 2. Clone or Update Repository
+# 3. Clone or Update Repository
 if [ -d "$TARGET_DIR/.git" ]; then
     echo "[*] Updating existing repository in $TARGET_DIR..."
     git -C "$TARGET_DIR" pull --ff-only || echo "[!] Notice: Local changes present, continuing with local version."
@@ -53,7 +60,7 @@ else
     git clone "$CLONE_URL" "$TARGET_DIR"
 fi
 
-# 3. Create global symlink
+# 4. Create global symlink
 ln -sf "$TARGET_DIR/homelab.sh" /usr/local/bin/homelab
 chmod +x "$TARGET_DIR/homelab.sh"
 

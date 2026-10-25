@@ -14,7 +14,18 @@ if ! command -v transmission-daemon >/dev/null 2>&1; then
     apk_add transmission-daemon transmission-daemon-openrc
 fi
 
-mkdir -p /var/lib/transmission/config "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete"
+addgroup transmission media 2>/dev/null || true
+
+mkdir -p /var/lib/transmission/config "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" /var/log/transmission
+chown -R transmission:media /var/log/transmission /var/lib/transmission 2>/dev/null || true
+chown -R "${SAFE_USER:-admin}:media" "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" 2>/dev/null || true
+chmod 2775 "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" 2>/dev/null || true
+
+cat << 'EOF' > /etc/conf.d/transmission-daemon
+logfile="/var/log/transmission/transmission.log"
+TRANSMISSION_OPTIONS="--log-info"
+EOF
+
 cat << EOF > /var/lib/transmission/config/settings.json
 {
     "bind-address-ipv4": "0.0.0.0",

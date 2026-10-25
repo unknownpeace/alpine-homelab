@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 log_info "Initializing storage layout at $STORAGE_BASE..."
 
 mkdir -p "$STORAGE_BASE/music" "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" "$STORAGE_BASE/backups"
-addgroup -g 1000 media 2>/dev/null || true
+addgroup -g 1000 media 2>/dev/null || addgroup media 2>/dev/null || true
 
 # Sanitize username to valid POSIX account (lowercase alphanumeric)
 SAFE_USER=$(echo "$AUTH_USER" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
@@ -20,11 +20,14 @@ if ! id -u "$SAFE_USER" >/dev/null 2>&1; then
 fi
 if id -u "$SAFE_USER" >/dev/null 2>&1; then
     echo "$SAFE_USER:$AUTH_PASS" | chpasswd
+    addgroup "$SAFE_USER" media 2>/dev/null || true
 fi
 
-# Add service daemons to media group
+# Add existing service daemons to media group
 for u in caddy transmission navidrome forgejo; do
-    addgroup "$u" media 2>/dev/null || true
+    if id -u "$u" >/dev/null 2>&1; then
+        addgroup "$u" media 2>/dev/null || true
+    fi
 done
 
 chown -R "$SAFE_USER:media" "$STORAGE_BASE"

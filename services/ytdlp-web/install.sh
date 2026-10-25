@@ -31,6 +31,8 @@ supervisor="supervise-daemon"
 command="/usr/bin/python3"
 command_args="/opt/ytdlp-web/app.py"
 directory="/opt/ytdlp-web"
+output_log="/var/log/ytdlp-web.log"
+error_log="/var/log/ytdlp-web.log"
 depend() {
     need net
     after firewall

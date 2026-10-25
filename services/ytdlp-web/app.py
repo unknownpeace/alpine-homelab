@@ -3,6 +3,8 @@ import sys, os, subprocess, json, threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 
+os.umask(0o002)
+
 STORAGE_DIR = os.environ.get("STORAGE_BASE", "/srv/storage")
 
 class SimpleYTDLHandler(BaseHTTPRequestHandler):
@@ -66,6 +68,8 @@ class SimpleYTDLHandler(BaseHTTPRequestHandler):
                         u
                     ]
                     subprocess.run(cmd)
+                    subprocess.run(["chgrp", "-R", "media", d], check=False)
+                    subprocess.run(["chmod", "-R", "g+rwX", d], check=False)
                 threading.Thread(target=run_dl, args=(url, target_dir)).start()
 
             self.send_response(200)

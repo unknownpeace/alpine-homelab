@@ -13,7 +13,12 @@ log_info "Deploying sing-box-extended 1.14 and DNS Engine..."
 # 1. Download sing-box-extended binary if missing
 if [ ! -f /usr/bin/sing-box ]; then
     log_info "Downloading sing-box-extended binary (35 MB)..."
-    curl -fL --retry 3 --progress-bar https://github.com/shtorm-7/sing-box-extended/releases/download/v1.14.3-extended-2.7.3/sing-box-1.14.3-extended-2.7.3-linux-amd64.tar.gz -o /tmp/sing-box.tar.gz
+    SB_ARCH_DL="amd64"
+    case "${HOST_ARCH:-$(uname -m)}" in
+        aarch64|arm64) SB_ARCH_DL="arm64" ;;
+        *) SB_ARCH_DL="amd64" ;;
+    esac
+    curl -fL --retry 3 --progress-bar "https://github.com/shtorm-7/sing-box-extended/releases/download/v1.14.3-extended-2.7.3/sing-box-1.14.3-extended-2.7.3-linux-${SB_ARCH_DL}.tar.gz" -o /tmp/sing-box.tar.gz
     tar -xzf /tmp/sing-box.tar.gz -C /tmp/
     cp /tmp/sing-box-*/sing-box /usr/bin/sing-box
     chmod +x /usr/bin/sing-box
@@ -49,6 +54,8 @@ description="sing-box Universal Proxy & Smart DNS Engine"
 supervisor="supervise-daemon"
 command="/usr/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
+output_log="/var/log/sing-box.log"
+error_log="/var/log/sing-box.log"
 respawn_delay=2
 respawn_max=5
 respawn_period=60

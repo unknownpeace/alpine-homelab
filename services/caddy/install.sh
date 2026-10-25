@@ -14,17 +14,26 @@ if ! command -v caddy >/dev/null 2>&1; then
     apk_add caddy caddy-openrc
 fi
 
+addgroup caddy media 2>/dev/null || true
 setcap cap_net_bind_service=+ep /usr/sbin/caddy 2>/dev/null || true
 
 RAW_HASH=$(caddy hash-password --plaintext "$AUTH_PASS")
 
-mkdir -p /etc/caddy/conf.d
+mkdir -p /etc/caddy/conf.d /var/log/caddy
+chown -R caddy:caddy /var/log/caddy 2>/dev/null || true
 rm -f /etc/caddy/conf.d/*.conf
 
 cat << EOF > /etc/caddy/Caddyfile
 {
     local_certs
     skip_install_trust
+    log {
+        output file /var/log/caddy/caddy.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+        level INFO
+    }
 }
 
 (security_headers) {

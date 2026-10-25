@@ -57,6 +57,8 @@ command="/usr/bin/ttyd"
 command_args="-b /ttyd -p 7681 -i 127.0.0.1 -W -a /opt/lxc-manager/term-attach.sh"
 command_user="root"
 directory="/opt/lxc-manager"
+output_log="/var/log/ttyd.log"
+error_log="/var/log/ttyd.log"
 respawn_delay=2
 respawn_max=5
 

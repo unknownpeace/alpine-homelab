@@ -161,7 +161,7 @@ chown -R adguardhome:adguardhome /var/lib/adguardhome /etc/adguardhome 2>/dev/nu
 # If sing-box is currently bound to port 53, reconfigure sing-box to port 5353
 if grep -q '"listen_port": 53\b' /etc/sing-box/config.json 2>/dev/null; then
     log_info "sing-box currently listening on port 53; switching sing-box to port 5353..."
-    IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREAM_PRIMARY" DNS_UPSTREAM_SECONDARY="$DNS_UPSTREAM_SECONDARY" SINGBOX_DNS_PORT="5353" ENABLE_ADGUARD_HOME="yes" /usr/local/bin/update-sub.py "$SUB_URL" >/dev/null 2>&1 || true
+    IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREAM_PRIMARY" DNS_UPSTREAM_SECONDARY="$DNS_UPSTREAM_SECONDARY" SINGBOX_DNS_PORT="5353" ENABLE_ADGUARD_HOME="yes" /usr/local/bin/update-sub.py "${PROXY_INPUT:-direct}" >/dev/null 2>&1 || true
 fi
 
 rc-update add adguardhome default >/dev/null 2>&1 || true
