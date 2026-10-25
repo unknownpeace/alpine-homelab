@@ -25,8 +25,12 @@ for prefix in vault git matrix music; do
     code=$(curl -s -k -o /dev/null -w "%{http_code}" --resolve "$d:443:$HOST_IP" "https://$d/")
     echo "$d -> HTTP $code"
 done
-for prefix in "torrent.$BASE_DOMAIN/transmission/web/" "ytdl.$BASE_DOMAIN" "proxy.$BASE_DOMAIN/ui/" "lxc.$BASE_DOMAIN" "adguard.$BASE_DOMAIN"; do
+for prefix in "torrent.$BASE_DOMAIN/transmission/web/" "ytdl.$BASE_DOMAIN" "proxy.$BASE_DOMAIN/ui/" "lxc.$BASE_DOMAIN"; do
     h=$(echo "$prefix" | cut -d/ -f1)
     code=$(curl -s -k -o /dev/null -w "%{http_code}" -u "$AUTH_USER:$AUTH_PASS" --resolve "$h:443:$HOST_IP" "https://$prefix")
     echo "$prefix (Auth) -> HTTP $code"
 done
+if [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
+    code=$(curl -s -k -o /dev/null -w "%{http_code}" -u "$AUTH_USER:$AUTH_PASS" --resolve "adguard.$BASE_DOMAIN:443:$HOST_IP" "https://adguard.$BASE_DOMAIN")
+    echo "adguard.$BASE_DOMAIN (Auth) -> HTTP $code"
+fi
