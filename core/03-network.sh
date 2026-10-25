@@ -13,7 +13,7 @@ if [ "${BRIDGE_ENABLE:-yes}" = "yes" ] && [ "$PHYSICAL_IF" != "br0" ] && ! grep 
     log_info "Transitioning network to LAN bridge (br0) enslaved to $PHYSICAL_IF..."
     
     # Update /etc/network/interfaces for persistence across reboots
-    sed -i -E "s/^[[:space:]]*iface[[:space:]]+$PHYSICAL_IF[[:space:]]+inet[[:space:]]+(dhcp|static).*/iface $PHYSICAL_IF inet manual/" /etc/network/interfaces 2>/dev/null || true
+    sed -i -E "s/^[[:space:]]*iface[[:space:]]+${PHYSICAL_IF}[[:space:]]+inet[[:space:]]+(dhcp|static).*/iface ${PHYSICAL_IF} inet manual/" /etc/network/interfaces 2>/dev/null || true
 cat << EOF >> /etc/network/interfaces
 
 auto br0

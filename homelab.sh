@@ -421,7 +421,7 @@ get_service_log_file() {
         conduit|tuwunel) echo "/var/log/conduit.log" ;;
         samba|smbd)
             local cand
-            cand=$(ls -t /var/log/samba/*.log 2>/dev/null | head -n1)
+            cand=$(find /var/log/samba -maxdepth 1 -name "*.log" 2>/dev/null | head -n1)
             echo "${cand:-/var/log/samba/log.smbd}"
             ;;
         wsdd) echo "/var/log/wsdd.log" ;;

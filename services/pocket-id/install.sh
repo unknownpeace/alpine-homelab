@@ -19,8 +19,11 @@ case "${HOST_ARCH:-$(uname -m)}" in
 esac
 
 if [ ! -f /usr/local/bin/pocket-id ]; then
-    curl -fL --retry 3 "https://github.com/pocket-id/pocket-id/releases/latest/download/pocket-id_linux_${PID_ARCH}" -o /usr/local/bin/pocket-id && \
-        chmod +x /usr/local/bin/pocket-id || rm -f /usr/local/bin/pocket-id
+    if curl -fL --retry 3 "https://github.com/pocket-id/pocket-id/releases/latest/download/pocket-id_linux_${PID_ARCH}" -o /usr/local/bin/pocket-id; then
+        chmod +x /usr/local/bin/pocket-id
+    else
+        rm -f /usr/local/bin/pocket-id
+    fi
 fi
 
 if ! id -u pocketid >/dev/null 2>&1; then
