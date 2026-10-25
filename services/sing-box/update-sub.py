@@ -370,7 +370,13 @@ custom_groups = [
 main_selector = "🚀 Выбор узла"
 final_outbounds = custom_groups + provider_groups + clean_nodes + [{"type": "direct", "tag": "direct"}]
 IP_HOST = get_default_ip()
-BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "lan").lstrip(".")
+raw_base_domain = os.environ.get("BASE_DOMAIN", "lan").lstrip(".")
+try:
+    raw_base_domain = raw_base_domain.encode("ascii", "ignore").decode("ascii")
+except Exception:
+    pass
+import re
+BASE_DOMAIN = re.sub(r'[^a-zA-Z0-9.-]', '', raw_base_domain).lower().strip('.') or "lan"
 DNS_PRIMARY = os.environ.get("DNS_UPSTREAM_PRIMARY", "https://dns.adguard-dns.com/dns-query")
 DNS_SECONDARY = os.environ.get("DNS_UPSTREAM_SECONDARY", "1.1.1.1")
 if ADGUARD_ENABLED:
@@ -502,8 +508,21 @@ config = {
     }
 }
 
+def sanitize_obj(obj):
+    if isinstance(obj, str):
+        try:
+            return obj.encode('utf-8', 'surrogateescape').decode('utf-8', 'replace')
+        except Exception:
+            return obj.encode('utf-8', 'replace').decode('utf-8')
+    elif isinstance(obj, dict):
+        return {sanitize_obj(k): sanitize_obj(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_obj(x) for x in obj]
+    return obj
+
+config = sanitize_obj(config)
 os.makedirs("/etc/sing-box", exist_ok=True)
-with open("/etc/sing-box/config.json", "w", encoding="utf-8") as f:
+with open("/etc/sing-box/config.json", "w", encoding="utf-8", errors="replace") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
 
 subprocess.run(["rc-service", "sing-box", "restart"], check=False)

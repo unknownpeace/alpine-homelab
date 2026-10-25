@@ -257,6 +257,98 @@ def api_catalog():
         "cached": list(set(cached_images))
     }
 
+TEMPLATE_TASK = {
+    "status": "idle",
+    "distro": "",
+    "release": "",
+    "message": ""
+}
+
+@app.route("/api/templates/download", method="POST")
+def api_template_download():
+    response.content_type = "application/json"
+    global TEMPLATE_TASK
+    if TEMPLATE_TASK["status"] == "running":
+        return {"success": False, "error": f"Уже выполняется загрузка {TEMPLATE_TASK['distro']} {TEMPLATE_TASK['release']}"}
+
+    data = request.json or {}
+    distro = data.get("distro", "").strip().lower()
+    release = data.get("release", "").strip()
+    if not distro or not release:
+        return {"success": False, "error": "Не указан дистрибутив или релиз."}
+
+    TEMPLATE_TASK = {
+        "status": "running",
+        "distro": distro,
+        "release": release,
+        "message": f"Загрузка шаблона {distro} {release}..."
+    }
+
+    def _worker():
+        global TEMPLATE_TASK
+        try:
+            if distro == "alpine" and release in ["3.24", "current", "latest"]:
+                os.makedirs(os.path.join(LXC_DIR, "cache"), exist_ok=True)
+                url = os.environ.get("MINIROOTFS_URL", "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz")
+                cmd = ["curl", "-fL", "--retry", "3", "--connect-timeout", "15", url, "-o", MINIROOTFS_CACHE]
+                code, out, err = run_cmd(cmd, timeout=120)
+                if code == 0 and os.path.exists(MINIROOTFS_CACHE) and os.path.getsize(MINIROOTFS_CACHE) > 0:
+                    TEMPLATE_TASK["status"] = "success"
+                    TEMPLATE_TASK["message"] = f"Шаблон Alpine {release} успешно загружен в кэш!"
+                else:
+                    TEMPLATE_TASK["status"] = "error"
+                    TEMPLATE_TASK["message"] = f"Ошибка загрузки Alpine minirootfs: {err or out}"
+            else:
+                tmp_cname = f"tmpl-dl-{distro}-{release}".replace(".", "-")
+                cmd = ["lxc-create", "-n", tmp_cname, "-t", "download", "--", "-d", distro, "-r", release, "-a", "amd64"]
+                code, out, err = run_cmd(cmd, timeout=600)
+                run_cmd(["lxc-destroy", "-n", tmp_cname, "-f"], timeout=30)
+                if code == 0:
+                    TEMPLATE_TASK["status"] = "success"
+                    TEMPLATE_TASK["message"] = f"Шаблон {distro} {release} успешно загружен и закэширован!"
+                else:
+                    TEMPLATE_TASK["status"] = "error"
+                    TEMPLATE_TASK["message"] = f"Ошибка загрузки {distro} {release}: {err or out}"
+        except Exception as ex:
+            TEMPLATE_TASK["status"] = "error"
+            TEMPLATE_TASK["message"] = f"Исключение при загрузке: {str(ex)}"
+
+    import threading
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return {"success": True, "message": f"Начата фоновая загрузка шаблона {distro} {release}."}
+
+@app.route("/api/templates/status", method="GET")
+def api_template_status():
+    response.content_type = "application/json"
+    return TEMPLATE_TASK
+
+@app.route("/api/templates/delete", method="POST")
+def api_template_delete():
+    response.content_type = "application/json"
+    data = request.json or {}
+    distro = data.get("distro", "").strip().lower()
+    release = data.get("release", "").strip()
+    if not distro or not release:
+        return {"success": False, "error": "Не указан дистрибутив или релиз."}
+
+    try:
+        deleted = False
+        if distro == "alpine" and release in ["3.24", "current", "latest"]:
+            if os.path.exists(MINIROOTFS_CACHE):
+                os.remove(MINIROOTFS_CACHE)
+                deleted = True
+        cpath = os.path.join(CACHE_DIR, "download", distro, release)
+        if os.path.exists(cpath):
+            shutil.rmtree(cpath, ignore_errors=True)
+            deleted = True
+        if deleted:
+            return {"success": True, "message": f"Кэш шаблона {distro} {release} удален."}
+        else:
+            return {"success": False, "error": f"Шаблон {distro} {release} не найден в кэше."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.route("/api/containers", method="GET")
 def api_containers():
     response.content_type = "application/json"
@@ -643,6 +735,9 @@ INDEX_HTML = """<!DOCTYPE html>
             </div>
 
             <div class="flex items-center gap-3">
+                <button onclick="openTemplatesModal()" class="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-sm px-3.5 py-2 rounded-lg transition active:scale-95 shadow-sm">
+                    <span>📥</span> Шаблоны ОС
+                </button>
                 <button onclick="openCreateModal()" class="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium text-sm px-4 py-2 rounded-lg shadow-md shadow-blue-600/20 transition-all active:scale-95">
                     <span>⚡</span> Создать Sandbox
                 </button>
@@ -799,11 +894,12 @@ INDEX_HTML = """<!DOCTYPE html>
 
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Версия / Релиз</label>
-                        <select id="new-release" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs font-mono">
+                        <select id="new-release" onchange="updateCacheHint()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs font-mono">
                             <!-- Populated dynamically via JS -->
                         </select>
                     </div>
                 </div>
+                <div id="distro-cache-hint" class="text-xs pt-1"></div>
 
                 <!-- Custom Distro/Release fields (hidden by default) -->
                 <div id="custom-fields" class="grid grid-cols-2 gap-3 hidden p-3 bg-slate-950/60 rounded-lg border border-slate-800">
@@ -868,7 +964,37 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Snapshots Modal -->
+    <!-- Templates Catalog Modal -->
+    <div id="templates-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <span>📥</span> Каталог Шаблонов ОС (LXC Images)
+                </h3>
+                <button onclick="closeTemplatesModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <div id="template-dl-banner" class="hidden p-3.5 bg-blue-950/40 border border-blue-500/30 rounded-xl space-y-1">
+                <div class="flex items-center justify-between text-xs">
+                    <span id="template-dl-text" class="text-blue-300 font-medium flex items-center gap-2">
+                        <svg class="animate-spin w-4 h-4 text-blue-400 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        Загрузка шаблона...
+                    </span>
+                    <span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 font-mono">В процессе</span>
+                </div>
+                <p class="text-[11px] text-slate-400">Шаблон загружается в кэш хоста (/var/cache/lxc). Закрытие окна не прервет фоновую загрузку.</p>
+            </div>
+
+            <div class="space-y-3 overflow-y-auto flex-1 pr-1" id="templates-list-container">
+                <!-- Populated dynamically via JS -->
+            </div>
+
+            <div class="flex items-center justify-between pt-3 border-t border-slate-800 text-xs text-slate-500">
+                <span>Кэш: <code class="text-slate-400 font-mono">/var/cache/lxc/download</code></span>
+                <button type="button" onclick="closeTemplatesModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Закрыть</button>
+            </div>
+        </div>
+    </div>
     <div id="snapshot-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3">
@@ -1026,6 +1152,145 @@ INDEX_HTML = """<!DOCTYPE html>
                 html += `<option value="${r.id}">${r.name}${cacheBadge}</option>`;
             }
             releaseSelect.innerHTML = html;
+            updateCacheHint();
+        }
+
+        function updateCacheHint() {
+            const distro = document.getElementById('new-distro').value;
+            const release = document.getElementById('new-release').value;
+            const hint = document.getElementById('distro-cache-hint');
+            if (!hint) return;
+            if (distro === 'custom') {
+                hint.innerHTML = '<span class="text-amber-400">⚠️ Произвольный образ — будет скачан из репозитория images.linuxcontainers.org</span>';
+                return;
+            }
+            const isCached = cachedImagesList.includes(`${distro}:${release}`);
+            if (isCached) {
+                hint.innerHTML = '<span class="text-emerald-400 font-medium flex items-center gap-1">⚡ Шаблон в кэше — создание песочницы займет ~1-2 сек</span>';
+            } else {
+                hint.innerHTML = `<span class="text-slate-400">📥 Шаблон не в кэше — будет скачан при создании (~1-2 мин). <a href="javascript:void(0)" onclick="closeCreateModal(); openTemplatesModal();" class="text-blue-400 underline hover:text-blue-300">Открыть менеджер шаблонов</a></span>`;
+            }
+        }
+
+        let templatePollTimer = null;
+
+        function openTemplatesModal() {
+            renderTemplatesCatalog();
+            document.getElementById('templates-modal').classList.remove('hidden');
+            pollTemplateStatus();
+        }
+
+        function closeTemplatesModal() {
+            document.getElementById('templates-modal').classList.add('hidden');
+            if (templatePollTimer) {
+                clearInterval(templatePollTimer);
+                templatePollTimer = null;
+            }
+        }
+
+        function renderTemplatesCatalog() {
+            const container = document.getElementById('templates-list-container');
+            if (!container) return;
+            let html = '';
+            for (const [distKey, dist] of Object.entries(catalogData)) {
+                html += `
+                <div class="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="font-semibold text-white text-sm">${escapeHtml(dist.name)}</span>
+                        <span class="text-xs text-slate-500 font-mono">${escapeHtml(distKey)}</span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">`;
+                for (const r of (dist.releases || [])) {
+                    const tag = `${distKey}:${r.id}`;
+                    const isCached = cachedImagesList.includes(tag);
+                    html += `
+                        <div class="flex items-center justify-between p-2 bg-slate-900 border border-slate-800/80 rounded-lg text-xs">
+                            <div class="flex items-center gap-2 overflow-hidden">
+                                <span class="font-medium text-slate-300 truncate">${escapeHtml(r.name || r.id)}</span>
+                                ${isCached ? '<span class="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded font-mono shrink-0">⚡ В кэше</span>' : '<span class="text-[10px] text-slate-500 shrink-0">Не скачан</span>'}
+                            </div>
+                            <div class="shrink-0 ml-2">
+                                ${isCached ? `
+                                    <button onclick="deleteTemplate('${escapeHtml(distKey)}', '${escapeHtml(r.id)}')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded border border-rose-800/40 text-[11px]" title="Удалить из кэша">🗑️</button>
+                                ` : `
+                                    <button onclick="downloadTemplate('${escapeHtml(distKey)}', '${escapeHtml(r.id)}')" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px] font-medium transition flex items-center gap-1 shadow-sm">📥 Скачать</button>
+                                `}
+                            </div>
+                        </div>`;
+                }
+                html += `</div></div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        async function downloadTemplate(distro, release) {
+            try {
+                const res = await fetch('/api/templates/download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ distro, release })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'info');
+                    pollTemplateStatus();
+                } else {
+                    showToast(d.error || 'Ошибка запуска загрузки', 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка сети: ${err.message}`, 'error');
+            }
+        }
+
+        async function deleteTemplate(distro, release) {
+            if (!confirm(`Удалить кэш шаблона ${distro} ${release}?`)) return;
+            try {
+                const res = await fetch('/api/templates/delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ distro, release })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    await fetchCatalog();
+                    renderTemplatesCatalog();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            }
+        }
+
+        async function pollTemplateStatus() {
+            try {
+                const res = await fetch('/api/templates/status');
+                if (!res.ok) return;
+                const d = await res.json();
+                const banner = document.getElementById('template-dl-banner');
+                const text = document.getElementById('template-dl-text');
+                if (d.status === 'running') {
+                    if (banner) banner.classList.remove('hidden');
+                    if (text) text.innerHTML = `<svg class="animate-spin w-4 h-4 text-blue-400 inline mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>${escapeHtml(d.message)}`;
+                    if (!templatePollTimer) {
+                        templatePollTimer = setInterval(pollTemplateStatus, 2000);
+                    }
+                } else {
+                    if (banner) banner.classList.add('hidden');
+                    if (templatePollTimer) {
+                        clearInterval(templatePollTimer);
+                        templatePollTimer = null;
+                    }
+                    if (d.status === 'success' || d.status === 'error') {
+                        if (d.status === 'success') showToast(d.message, 'success');
+                        if (d.status === 'error') showToast(d.message, 'error');
+                        d.status = 'idle';
+                        await fetchCatalog();
+                        renderTemplatesCatalog();
+                    }
+                }
+            } catch (e) {}
         }
 
         function toggleNetModeUI() {

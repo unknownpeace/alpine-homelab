@@ -112,10 +112,16 @@ if { [ ! -f "$CONFIG_TARGET" ] || [ "${RECONFIG_MODE:-0}" = "1" ]; } && [ -t 0 ]
         fi
     fi
 
-    # 3.3 Domain
+    # 3.3 Domain (Sanitized to lowercase ASCII alphanumeric and dots)
     printf "3. Базовый домен для локальных HTTPS сайтов (*.lan) [Enter = %s]: " "${PREV_BASE_DOMAIN:-lan}"
     read -r IN_DOM
-    BASE_DOMAIN="${IN_DOM:-${PREV_BASE_DOMAIN:-lan}}"
+    IN_DOM="${IN_DOM:-${PREV_BASE_DOMAIN:-lan}}"
+    CLEAN_DOM=$(echo "$IN_DOM" | tr -cd 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]' | sed 's/^\.*//; s/\.*$//')
+    [ -z "$CLEAN_DOM" ] && CLEAN_DOM="lan"
+    if [ "$IN_DOM" != "$CLEAN_DOM" ]; then
+        echo -e "   ${C_YELLOW}[!] Базовый домен исправлен на латиницу:${C_RESET} ${C_BOLD}$CLEAN_DOM${C_RESET}"
+    fi
+    BASE_DOMAIN="$CLEAN_DOM"
 
     # 3.4 Timezone
     printf "4. Системная таймзона [Enter = %s]: " "${PREV_TIMEZONE:-Europe/Moscow}"

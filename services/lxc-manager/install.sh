@@ -33,12 +33,11 @@ rc-service cgroups start >/dev/null 2>&1 || true
 rc-update add lxc default >/dev/null 2>&1 || true
 rc-service lxc start >/dev/null 2>&1 || true
 
-mkdir -p /opt/lxc-manager /var/lib/lxc/cache
-
 # 1. Pre-cache Alpine minirootfs for instant 1s sandbox cloning
-if [ ! -f /var/lib/lxc/cache/alpine-minirootfs.tar.gz ]; then
+mkdir -p /var/lib/lxc/cache /opt/lxc-manager
+if [ ! -s /var/lib/lxc/cache/alpine-minirootfs.tar.gz ]; then
     log_info "Caching Alpine minirootfs template for instant LXC sandbox provisioning..."
-    curl -fL --retry 3 --connect-timeout 8 "$MINIROOTFS_URL" -o /var/lib/lxc/cache/alpine-minirootfs.tar.gz 2>/dev/null || true
+    curl -fL --retry 3 --connect-timeout 15 "$MINIROOTFS_URL" -o /var/lib/lxc/cache/alpine-minirootfs.tar.gz || rm -f /var/lib/lxc/cache/alpine-minirootfs.tar.gz
 fi
 
 # 2. Deploy app.py and term-attach.sh

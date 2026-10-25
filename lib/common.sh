@@ -1,6 +1,9 @@
 #!/bin/sh
 # Shared utilities and helpers for Alpine Homelab CLI
 
+export LC_ALL="C.UTF-8"
+export LANG="C.UTF-8"
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_RED="\033[1;31m"
