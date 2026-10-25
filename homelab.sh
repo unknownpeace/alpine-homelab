@@ -80,16 +80,34 @@ cmd_install() {
     [ "${ENABLE_CADDY:-yes}" = "yes" ] && sh "$SERVICES_DIR/caddy/install.sh"
     [ "${ENABLE_SINGBOX:-yes}" = "yes" ] && sh "$SERVICES_DIR/sing-box/install.sh"
     [ "${ENABLE_DASHBOARD:-yes}" = "yes" ] && sh "$SERVICES_DIR/dashboard/install.sh"
-    [ "${ENABLE_VAULTWARDEN:-yes}" = "yes" ] && sh "$SERVICES_DIR/vaultwarden/install.sh"
-    [ "${ENABLE_FORGEJO:-yes}" = "yes" ] && sh "$SERVICES_DIR/forgejo/install.sh"
-    [ "${ENABLE_CONDUIT:-yes}" = "yes" ] && sh "$SERVICES_DIR/conduit/install.sh"
-    [ "${ENABLE_NAVIDROME:-yes}" = "yes" ] && sh "$SERVICES_DIR/navidrome/install.sh"
-    [ "${ENABLE_TRANSMISSION:-yes}" = "yes" ] && sh "$SERVICES_DIR/transmission/install.sh"
-    [ "${ENABLE_SAMBA:-yes}" = "yes" ] && sh "$SERVICES_DIR/samba/install.sh"
-    [ "${ENABLE_YTDLP:-yes}" = "yes" ] && sh "$SERVICES_DIR/ytdlp-web/install.sh"
-    [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && sh "$SERVICES_DIR/lxc-manager/install.sh"
-    [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && sh "$SERVICES_DIR/adguardhome/install.sh"
-    [ "${ENABLE_TAILSCALE:-no}" = "yes" ] && sh "$SERVICES_DIR/tailscale/install.sh"
+
+    sync_service_state() {
+        local flag="$1"
+        local svc_script="$2"
+        local openrc_name="$3"
+        local snippet_name="${4:-$openrc_name}"
+        if [ "$flag" = "yes" ]; then
+            sh "$svc_script"
+        else
+            if rc-service "$openrc_name" status >/dev/null 2>&1; then
+                log_info "Stopping disabled service: $openrc_name..."
+                rc-service "$openrc_name" stop >/dev/null 2>&1 || true
+                rc-update del "$openrc_name" default >/dev/null 2>&1 || true
+            fi
+            [ -n "$snippet_name" ] && remove_caddy_snippet "$snippet_name"
+        fi
+    }
+
+    sync_service_state "${ENABLE_VAULTWARDEN:-no}" "$SERVICES_DIR/vaultwarden/install.sh" "vaultwarden"
+    sync_service_state "${ENABLE_FORGEJO:-no}" "$SERVICES_DIR/forgejo/install.sh" "forgejo"
+    sync_service_state "${ENABLE_CONDUIT:-no}" "$SERVICES_DIR/conduit/install.sh" "conduit"
+    sync_service_state "${ENABLE_NAVIDROME:-no}" "$SERVICES_DIR/navidrome/install.sh" "navidrome"
+    sync_service_state "${ENABLE_TRANSMISSION:-no}" "$SERVICES_DIR/transmission/install.sh" "transmission-daemon" "transmission"
+    sync_service_state "${ENABLE_SAMBA:-no}" "$SERVICES_DIR/samba/install.sh" "samba" ""
+    sync_service_state "${ENABLE_YTDLP:-no}" "$SERVICES_DIR/ytdlp-web/install.sh" "ytdlp-web" "ytdlp"
+    sync_service_state "${ENABLE_LXC_MANAGER:-no}" "$SERVICES_DIR/lxc-manager/install.sh" "lxc-manager"
+    sync_service_state "${ENABLE_ADGUARD_HOME:-no}" "$SERVICES_DIR/adguardhome/install.sh" "adguardhome"
+    sync_service_state "${ENABLE_TAILSCALE:-no}" "$SERVICES_DIR/tailscale/install.sh" "tailscale" ""
 
     # Finalize host DNS resolver to local engine after all package downloads complete
     if [ "${ENABLE_SINGBOX:-yes}" = "yes" ] || [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
