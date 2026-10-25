@@ -27,4 +27,8 @@ if [ -n "$TIMEZONE" ]; then
     setup-timezone -z "$TIMEZONE" 2>/dev/null || true
 fi
 
-log_success "System packages installed and timezone configured."
+# Enable and start NTP synchronization daemon (prevent clock drift & SSL/GPG verification errors)
+rc-update add ntpd default >/dev/null 2>&1 || true
+rc-service ntpd restart >/dev/null 2>&1 || true
+
+log_success "System packages installed, timezone configured and NTP synchronized."

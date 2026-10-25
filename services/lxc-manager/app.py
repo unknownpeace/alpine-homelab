@@ -605,6 +605,54 @@ def api_containers():
 # Phase 1: Creation with Pre-seed, Limits & Cloning
 # -----------------------------------------------------------------------------
 
+def ensure_container_dns(name, net_mode=None):
+    """
+    Ensure the container has working DNS resolvers in /etc/resolv.conf.
+    For NAT mode containers (lxcbr0), upstream distro templates (Kali, Ubuntu, Debian, etc.)
+    frequently contain dead systemd-resolved stubs (127.0.0.53) which do not resolve in LXC on Alpine.
+    We unconditionally replace or update them with the host gateway (10.0.3.1) and upstream fallbacks (1.1.1.1, 8.8.8.8).
+    """
+    try:
+        cont_dir = os.path.join(LXC_DIR, name)
+        cfg_path = os.path.join(cont_dir, "config")
+        rootfs_dir = os.path.join(cont_dir, "rootfs")
+        if not os.path.exists(rootfs_dir):
+            return
+
+        if net_mode is None and os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                cfg_txt = f.read()
+            if "lxcbr0" in cfg_txt:
+                net_mode = "nat"
+            elif "br0" in cfg_txt:
+                net_mode = "lan"
+
+        if net_mode == "nat":
+            etc_dir = os.path.join(rootfs_dir, "etc")
+            os.makedirs(etc_dir, exist_ok=True)
+            resolv_path = os.path.join(etc_dir, "resolv.conf")
+
+            needs_update = True
+            if os.path.exists(resolv_path) and not os.path.islink(resolv_path):
+                try:
+                    with open(resolv_path, "r", encoding="utf-8") as rf:
+                        content = rf.read()
+                    if ("10.0.3.1" in content or "1.1.1.1" in content) and "127.0.0.53" not in content:
+                        needs_update = False
+                except Exception:
+                    needs_update = True
+
+            if needs_update:
+                if os.path.islink(resolv_path) or os.path.exists(resolv_path):
+                    try:
+                        os.unlink(resolv_path)
+                    except Exception:
+                        pass
+                with open(resolv_path, "w", encoding="utf-8") as f:
+                    f.write("nameserver 10.0.3.1\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    except Exception as e:
+        logger.warning(f"Failed to ensure DNS for container {name}: {e}")
+
 @app.route("/api/containers/create", method="POST")
 def api_create():
     response.content_type = "application/json"
@@ -691,8 +739,7 @@ lxc.start.auto = {"1" if autostart else "0"}
                     with open(inittab_path, "a", encoding="utf-8") as f:
                         f.write("\n::sysinit:/sbin/udhcpc -b -i eth0\n")
             else:
-                with open(os.path.join(etc_dir, "resolv.conf"), "w", encoding="utf-8") as f:
-                    f.write("nameserver 10.0.3.1\nnameserver 1.1.1.1\n")
+                ensure_container_dns(clean_name, net_mode)
 
             if os.path.exists("/etc/apk/repositories"):
                 apk_dir = os.path.join(etc_dir, "apk")
@@ -745,18 +792,8 @@ lxc.start.auto = {"1" if autostart else "0"}
                 with open(cfg_path, "w", encoding="utf-8") as f:
                     f.writelines(new_lines)
 
-            if os.path.exists(rootfs_dir):
-                etc_dir = os.path.join(rootfs_dir, "etc")
-                os.makedirs(etc_dir, exist_ok=True)
-                resolv_path = os.path.join(etc_dir, "resolv.conf")
-                if not os.path.exists(resolv_path) or os.path.islink(resolv_path):
-                    try:
-                        if os.path.islink(resolv_path):
-                            os.unlink(resolv_path)
-                        with open(resolv_path, "w", encoding="utf-8") as f:
-                            f.write("nameserver 10.0.3.1\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n")
-                    except Exception:
-                        pass
+            # Ensure container DNS configuration
+            ensure_container_dns(clean_name, net_mode)
 
         # Pre-seed: Inject SSH Public Key
         if ssh_key and os.path.exists(rootfs_dir):
@@ -922,6 +959,8 @@ def api_clone(name):
                 content = re.sub(r"lxc\.net\.0\.ipv4\.address\s*=\s*10\.0\.3\.\d+", f"lxc.net.0.ipv4.address = {new_ip}", content)
                 with open(cfg_path, "w", encoding="utf-8") as f:
                     f.write(content)
+
+        ensure_container_dns(clean_name)
 
         if start_now:
             run_cmd(["lxc-start", "-n", clean_name, "-d"])
@@ -1274,6 +1313,8 @@ def api_import():
             with open(cfg_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+        ensure_container_dns(clean_name)
+
         return {"success": True, "message": f"Контейнер '{clean_name}' успешно импортирован!"}
     except Exception as e:
         shutil.rmtree(target_dir, ignore_errors=True)
@@ -1301,6 +1342,7 @@ def api_action(name):
         return {"success": False, "error": "Container does not exist."}
 
     if action == "start":
+        ensure_container_dns(name)
         code, out, err = run_cmd(["lxc-start", "-n", name, "-d"])
         return {"success": code == 0, "message": "Container started" if code == 0 else err}
 
@@ -1311,6 +1353,7 @@ def api_action(name):
     elif action == "restart":
         run_cmd(["lxc-stop", "-n", name, "-k"])
         time.sleep(0.5)
+        ensure_container_dns(name)
         code, out, err = run_cmd(["lxc-start", "-n", name, "-d"])
         return {"success": code == 0, "message": "Container restarted" if code == 0 else err}
 
