@@ -23,10 +23,11 @@ def step_poweroff_and_restore():
         return False
     # Ensure promiscuous mode is enabled on bridged NIC for LXC containers to obtain router DHCP
     subprocess.run([VBOX, "modifyvm", VM_NAME, "--nicpromisc1", "allow-all"], capture_output=True)
-    log("Booting VM...")
-    res = subprocess.run([VBOX, "startvm", VM_NAME, "--type", "gui"], capture_output=True, text=True)
-    if res.returncode != 0:
-        subprocess.run([VBOX, "startvm", VM_NAME, "--type", "headless"], capture_output=True, text=True)
+    log("Booting VM in headless mode...")
+    res = subprocess.run([VBOX, "startvm", VM_NAME, "--type", "headless"], capture_output=True, text=True)
+    if res.returncode != 0 and "already locked" not in res.stderr:
+        log(f"Failed to start VM: {res.stderr}")
+        return False
     return True
 
 def step_wait_ssh():
@@ -47,6 +48,37 @@ def step_upload_script():
         subprocess.run(["scp", "-r", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", src, f"root@{VM_IP}:/opt/homelab/"], check=True)
     subprocess.run(["scp", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", VERIFY_LXC_PATH, f"root@{VM_IP}:/root/verify_lxc_api.py"], check=True)
     subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", f"root@{VM_IP}", "ln -sf /opt/homelab/homelab.sh /usr/local/bin/homelab && chmod -R +x /opt/homelab/*.sh /opt/homelab/core/*.sh /opt/homelab/services/*/*.sh /root/verify_lxc_api.py"], check=True)
+
+    # Pre-configure unattended config.env with live test subscription
+    config_env = (
+        'AUTH_USER="admin"\n'
+        'AUTH_PASS="admin"\n'
+        'BASE_DOMAIN="lan"\n'
+        'TIMEZONE="Europe/Moscow"\n'
+        'STORAGE_BASE="/srv/storage"\n'
+        'GATEWAY_MODE="yes"\n'
+        'BRIDGE_ENABLE="yes"\n'
+        'DNS_UPSTREAM_PRIMARY="https://dns.adguard-dns.com/dns-query"\n'
+        'DNS_UPSTREAM_SECONDARY="1.1.1.1"\n'
+        'PROXY_INPUT="https://sub.accessbyme.com/sub/52d6b91f62f84bd59b26e88bb280c76c?fmt=best"\n'
+        'ENABLE_CADDY="yes"\n'
+        'ENABLE_DASHBOARD="yes"\n'
+        'ENABLE_SINGBOX="yes"\n'
+        'ENABLE_LXC_MANAGER="yes"\n'
+        'ENABLE_VAULTWARDEN="yes"\n'
+        'ENABLE_FORGEJO="yes"\n'
+        'ENABLE_CONDUIT="yes"\n'
+        'ENABLE_NAVIDROME="yes"\n'
+        'ENABLE_TRANSMISSION="yes"\n'
+        'ENABLE_SAMBA="yes"\n'
+        'ENABLE_YTDLP="yes"\n'
+        'ENABLE_ADGUARD_HOME="no"\n'
+        'ENABLE_TAILSCALE="no"\n'
+    )
+    subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", f"root@{VM_IP}", f"cat << 'EOF' > /opt/homelab/config.env\n{config_env}EOF"],
+        check=True
+    )
     return True
 
 def step_run_installer():
