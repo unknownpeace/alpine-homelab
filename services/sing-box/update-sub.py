@@ -94,7 +94,6 @@ def parse_single_node(link: str) -> dict:
                 real_cfg = {"enabled": True}
                 if "pbk" in params: real_cfg["public_key"] = params["pbk"]
                 if "sid" in params: real_cfg["short_id"] = params["sid"]
-                if "spx" in params: real_cfg["spider_x"] = params["spx"]
                 tls_cfg["reality"] = real_cfg
             ob["tls"] = tls_cfg
         return ob

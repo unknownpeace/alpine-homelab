@@ -210,10 +210,10 @@ cmd_doctor() {
 
     echo ""
     echo -e "${C_WHITE}Checking DNS Resolution (port 53):${C_RESET}"
-    if nslookup "vault.$BASE_DOMAIN" 127.0.0.1 >/dev/null 2>&1; then
-        echo -e "  [${C_GREEN}PASS${C_RESET}] vault.$BASE_DOMAIN resolves locally"
+    if nslookup "homelab.$BASE_DOMAIN" 127.0.0.1 >/dev/null 2>&1; then
+        echo -e "  [${C_GREEN}PASS${C_RESET}] homelab.$BASE_DOMAIN resolves locally"
     else
-        echo -e "  [${C_RED}FAIL${C_RESET}] vault.$BASE_DOMAIN failed to resolve via 127.0.0.1"
+        echo -e "  [${C_RED}FAIL${C_RESET}] homelab.$BASE_DOMAIN failed to resolve via 127.0.0.1"
         issues=$((issues + 1))
     fi
 
@@ -226,7 +226,15 @@ cmd_doctor() {
 
     echo ""
     echo -e "${C_WHITE}Checking HTTPS Endpoints:${C_RESET}"
-    local endpoints="homelab vault git matrix music lxc"
+    local endpoints="homelab"
+    [ "${ENABLE_VAULTWARDEN:-yes}" = "yes" ] && endpoints="$endpoints vault"
+    [ "${ENABLE_FORGEJO:-yes}" = "yes" ]     && endpoints="$endpoints git"
+    [ "${ENABLE_CONDUIT:-yes}" = "yes" ]     && endpoints="$endpoints matrix"
+    [ "${ENABLE_NAVIDROME:-yes}" = "yes" ]   && endpoints="$endpoints music"
+    [ "${ENABLE_TRANSMISSION:-yes}" = "yes" ] && endpoints="$endpoints torrent"
+    [ "${ENABLE_YTDLP:-yes}" = "yes" ]       && endpoints="$endpoints ytdl"
+    [ "${ENABLE_SINGBOX:-yes}" = "yes" ]     && endpoints="$endpoints proxy"
+    [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && endpoints="$endpoints lxc"
     [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && endpoints="$endpoints adguard"
     for prefix in $endpoints; do
         local d="$prefix.$BASE_DOMAIN"
