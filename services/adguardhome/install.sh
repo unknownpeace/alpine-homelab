@@ -17,11 +17,16 @@ fi
 mkdir -p /etc/adguardhome /var/lib/adguardhome
 
 # Generate AdGuardHome.yaml if not present
-if [ ! -f /etc/adguardhome/AdGuardHome.yaml ]; then
+AGH_CONFIG="/var/lib/adguardhome/AdGuardHome.yaml"
+if [ ! -f "$AGH_CONFIG" ]; then
     log_info "Generating AdGuard Home configuration (UI port 3001, upstream 127.0.0.1:5353)..."
-    cat << EOF > /etc/adguardhome/AdGuardHome.yaml
-bind_host: 127.0.0.1
-bind_port: 3001
+    cat << EOF > "$AGH_CONFIG"
+http:
+  pprof:
+    port: 6060
+    enabled: false
+  address: 127.0.0.1:3001
+  session_ttl: 720h
 users: []
 auth_attempts: 5
 block_auth_min: 15
@@ -115,9 +120,12 @@ os:
   group: ""
   user: ""
   rlimit_nofile: 0
-schema_version: 29
+schema_version: 34
 EOF
+    ln -sf "$AGH_CONFIG" /etc/adguardhome/AdGuardHome.yaml 2>/dev/null || true
 fi
+
+chown -R adguardhome:adguardhome /var/lib/adguardhome /etc/adguardhome 2>/dev/null || true
 
 rc-update add adguardhome default >/dev/null 2>&1 || true
 rc-service adguardhome restart >/dev/null 2>&1 || true
