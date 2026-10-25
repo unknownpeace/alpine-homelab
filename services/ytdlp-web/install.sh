@@ -36,4 +36,6 @@ chmod +x /etc/init.d/ytdlp-web
 rc-update add ytdlp-web default >/dev/null 2>&1 || true
 rc-service ytdlp-web restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "ytdlp"
+
 log_success "Media Downloader running on https://ytdl.$BASE_DOMAIN"

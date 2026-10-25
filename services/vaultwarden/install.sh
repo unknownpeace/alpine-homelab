@@ -37,4 +37,6 @@ chown -R vaultwarden:vaultwarden /var/lib/vaultwarden
 rc-update add vaultwarden default >/dev/null 2>&1 || true
 rc-service vaultwarden restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "vaultwarden"
+
 log_success "Vaultwarden running on https://vault.$BASE_DOMAIN"

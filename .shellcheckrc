@@ -1,0 +1,13 @@
+# ShellCheck Configuration for Alpine Homelab (BusyBox ash / POSIX sh)
+
+# Disable non-fatal warnings for dynamic file sourcing (e.g. . "$ROOT_DIR/lib/common.sh")
+disable=SC1090
+disable=SC1091
+
+# Sourced / configuration variables used across multiple modules
+disable=SC2034
+
+# BusyBox ash extensions (local keyword, echo -e escape codes)
+disable=SC3036
+disable=SC3037
+disable=SC3043

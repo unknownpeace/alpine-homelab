@@ -1,0 +1,19 @@
+name: ShellCheck Lint
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  shellcheck:
+    name: Lint Shell Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck Analysis
+        run: |
+          find . -type f -name "*.sh" -not -path "./.git/*" -print0 | xargs -0 shellcheck -s sh

@@ -163,4 +163,6 @@ chown -R adguardhome:adguardhome /var/lib/adguardhome /etc/adguardhome 2>/dev/nu
 rc-update add adguardhome default >/dev/null 2>&1 || true
 rc-service adguardhome restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "adguardhome"
+
 log_success "AdGuard Home active on port 53 (DNS) and port 3001 (UI at https://adguard.$BASE_DOMAIN)."

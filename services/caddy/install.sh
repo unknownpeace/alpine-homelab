@@ -18,6 +18,8 @@ setcap cap_net_bind_service=+ep /usr/sbin/caddy 2>/dev/null || true
 
 RAW_HASH=$(caddy hash-password --plaintext "$AUTH_PASS")
 
+mkdir -p /etc/caddy/conf.d
+
 cat << EOF > /etc/caddy/Caddyfile
 {
     local_certs
@@ -34,100 +36,9 @@ homelab.$BASE_DOMAIN, $IP_HOST {
     root * /var/www/dashboard
     file_server
 }
+
+import /etc/caddy/conf.d/*.conf
 EOF
-
-# Conditionally configure reverse proxies based on ENABLE_* flags
-if [ "${ENABLE_VAULTWARDEN:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-vault.$BASE_DOMAIN {
-    reverse_proxy 127.0.0.1:8000
-}
-EOF
-fi
-
-if [ "${ENABLE_FORGEJO:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-git.$BASE_DOMAIN {
-    reverse_proxy 127.0.0.1:3000
-}
-EOF
-fi
-
-if [ "${ENABLE_CONDUIT:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-matrix.$BASE_DOMAIN {
-    reverse_proxy 127.0.0.1:6167
-}
-EOF
-fi
-
-if [ "${ENABLE_SINGBOX:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-proxy.$BASE_DOMAIN {
-    import homelab_auth
-    redir / /ui/
-    reverse_proxy 127.0.0.1:9090
-}
-EOF
-fi
-
-if [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-lxc.$BASE_DOMAIN {
-    import homelab_auth
-    handle /ttyd* {
-        reverse_proxy 127.0.0.1:7681
-    }
-    handle {
-        reverse_proxy 127.0.0.1:8888
-    }
-}
-EOF
-fi
-
-if [ "${ENABLE_NAVIDROME:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-music.$BASE_DOMAIN {
-    reverse_proxy 127.0.0.1:4533
-}
-EOF
-fi
-
-if [ "${ENABLE_TRANSMISSION:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-torrent.$BASE_DOMAIN {
-    import homelab_auth
-    redir / /transmission/web/
-    reverse_proxy 127.0.0.1:9091
-}
-EOF
-fi
-
-if [ "${ENABLE_YTDLP:-yes}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-ytdl.$BASE_DOMAIN {
-    import homelab_auth
-    reverse_proxy 127.0.0.1:8080
-}
-EOF
-fi
-
-if [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
-cat << EOF >> /etc/caddy/Caddyfile
-
-adguard.$BASE_DOMAIN {
-    reverse_proxy 127.0.0.1:3001
-}
-EOF
-fi
 
 rc-update add caddy default >/dev/null 2>&1 || true
 rc-service caddy restart >/dev/null 2>&1 || true

@@ -30,4 +30,6 @@ chown -R navidrome:media /var/lib/navidrome /etc/navidrome
 rc-update add navidrome default >/dev/null 2>&1 || true
 rc-service navidrome restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "navidrome"
+
 log_success "Navidrome running on https://music.$BASE_DOMAIN"

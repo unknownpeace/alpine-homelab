@@ -72,8 +72,8 @@ cmd_install() {
 
     # Execute Services based on ENABLE_* flags
     log_info ">>> Phase 2: Homelab Services Deployment <<<"
-    [ "${ENABLE_SINGBOX:-yes}" = "yes" ] && sh "$SERVICES_DIR/sing-box/install.sh"
     [ "${ENABLE_CADDY:-yes}" = "yes" ] && sh "$SERVICES_DIR/caddy/install.sh"
+    [ "${ENABLE_SINGBOX:-yes}" = "yes" ] && sh "$SERVICES_DIR/sing-box/install.sh"
     [ "${ENABLE_DASHBOARD:-yes}" = "yes" ] && sh "$SERVICES_DIR/dashboard/install.sh"
     [ "${ENABLE_VAULTWARDEN:-yes}" = "yes" ] && sh "$SERVICES_DIR/vaultwarden/install.sh"
     [ "${ENABLE_FORGEJO:-yes}" = "yes" ] && sh "$SERVICES_DIR/forgejo/install.sh"
@@ -94,6 +94,10 @@ nameserver 127.0.0.1
 nameserver 1.1.1.1
 nameserver 77.88.8.8
 EOF
+    fi
+
+    if [ "${ENABLE_CADDY:-yes}" = "yes" ] && rc-service caddy status >/dev/null 2>&1; then
+        rc-service caddy reload >/dev/null 2>&1 || rc-service caddy restart >/dev/null 2>&1 || true
     fi
 
     # Print Summary Cheat Sheet
@@ -372,9 +376,9 @@ cmd_backup() {
     rm -rf "$tmp"
 
     # 7. Rotation (keep 7 newest)
-    ls -1t "$dest"/homelab_backup_*.tar.gz 2>/dev/null | tail -n +8 | xargs rm -f 2>/dev/null || true
+    find "$dest" -maxdepth 1 -name "homelab_backup_*.tar.gz" | sort -r | tail -n +8 | xargs rm -f 2>/dev/null || true
 
-    log_success "Backup created: $target ($(ls -lh "$target" | awk '{print $5}'))"
+    log_success "Backup created: $target ($(du -h "$target" | awk '{print $1}'))"
 }
 
 cmd_restore() {

@@ -72,4 +72,6 @@ IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREA
 rc-update add sing-box default >/dev/null 2>&1 || true
 rc-service sing-box restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "sing-box"
+
 log_success "sing-box DNS and routing engine initialized (Domain: *.$BASE_DOMAIN)."

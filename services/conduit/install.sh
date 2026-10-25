@@ -32,4 +32,6 @@ chown -R conduit:conduit /var/lib/conduit /etc/conduit
 rc-update add conduit default >/dev/null 2>&1 || true
 rc-service conduit restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "conduit"
+
 log_success "Conduit Matrix running on https://matrix.$BASE_DOMAIN"

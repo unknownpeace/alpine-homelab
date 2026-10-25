@@ -1,0 +1,5 @@
+torrent.__BASE_DOMAIN__ {
+    import homelab_auth
+    redir / /transmission/web/
+    reverse_proxy 127.0.0.1:9091
+}

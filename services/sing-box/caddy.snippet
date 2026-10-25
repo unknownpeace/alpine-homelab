@@ -1,0 +1,5 @@
+proxy.__BASE_DOMAIN__ {
+    import homelab_auth
+    redir / /ui/
+    reverse_proxy 127.0.0.1:9090
+}

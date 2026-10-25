@@ -1,0 +1,9 @@
+lxc.__BASE_DOMAIN__ {
+    import homelab_auth
+    handle /ttyd* {
+        reverse_proxy 127.0.0.1:7681
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8888
+    }
+}

@@ -91,4 +91,6 @@ chmod +x /etc/init.d/lxc-manager
 rc-update add lxc-manager default >/dev/null 2>&1 || true
 rc-service lxc-manager restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "lxc-manager"
+
 log_success "LXC Sandbox Manager and ttyd Web Terminal deployed on https://lxc.$BASE_DOMAIN"

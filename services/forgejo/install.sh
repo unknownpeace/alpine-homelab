@@ -43,4 +43,6 @@ chown -R forgejo:www-data /etc/forgejo /var/lib/forgejo
 rc-update add forgejo default >/dev/null 2>&1 || true
 rc-service forgejo restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "forgejo"
+
 log_success "Forgejo Git running on https://git.$BASE_DOMAIN"

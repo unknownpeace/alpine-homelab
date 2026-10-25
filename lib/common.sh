@@ -36,3 +36,24 @@ apk_add() {
         attempt=$((attempt + 1))
     done
 }
+
+deploy_caddy_snippet() {
+    local svc="$1"
+    local snippet="${2:-$SERVICE_DIR/caddy.snippet}"
+    if [ ! -f "$snippet" ]; then
+        return 0
+    fi
+    mkdir -p /etc/caddy/conf.d
+    sed "s/__BASE_DOMAIN__/${BASE_DOMAIN:-lan}/g" "$snippet" > "/etc/caddy/conf.d/${svc}.conf"
+    if rc-service caddy status >/dev/null 2>&1; then
+        rc-service caddy reload >/dev/null 2>&1 || rc-service caddy restart >/dev/null 2>&1 || true
+    fi
+}
+
+remove_caddy_snippet() {
+    local svc="$1"
+    rm -f "/etc/caddy/conf.d/${svc}.conf"
+    if rc-service caddy status >/dev/null 2>&1; then
+        rc-service caddy reload >/dev/null 2>&1 || rc-service caddy restart >/dev/null 2>&1 || true
+    fi
+}

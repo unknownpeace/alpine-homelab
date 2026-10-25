@@ -43,4 +43,6 @@ chown -R transmission:media /var/lib/transmission
 rc-update add transmission-daemon default >/dev/null 2>&1 || true
 rc-service transmission-daemon restart >/dev/null 2>&1 || true
 
+deploy_caddy_snippet "transmission"
+
 log_success "Transmission running on https://torrent.$BASE_DOMAIN"
