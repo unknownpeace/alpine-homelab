@@ -118,9 +118,9 @@ cmd_reconfigure() {
     [ ! -f "$cfg" ] && cfg="$SCRIPT_DIR/config.env"
     if [ -f "$cfg" ]; then
         cp -f "$cfg" "${cfg}.bak"
-        rm -f "$cfg"
         log_info "Current configuration backed up to ${cfg}.bak"
     fi
+    export RECONFIG_MODE=1
     . "$LIB_DIR/detect.sh"
     cmd_install
 }

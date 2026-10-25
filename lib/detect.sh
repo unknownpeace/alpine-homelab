@@ -3,16 +3,19 @@
 # Alpine Homelab Appliance - Network, Environment & Interactive Setup Wizard
 # ==============================================================================
 
-# 1. Load config.env if present
+# 1. Load config.env if present (or backup config.env.bak during reconfigure)
 DETECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PARENT_DIR="$(cd "$DETECT_DIR/.." && pwd)"
 
-if [ -f "/opt/homelab/config.env" ]; then
-    # shellcheck disable=SC1091
-    . "/opt/homelab/config.env"
-elif [ -f "$PARENT_DIR/config.env" ]; then
-    # shellcheck disable=SC1091
-    . "$PARENT_DIR/config.env"
+CONFIG_TARGET="/opt/homelab/config.env"
+[ ! -d "/opt/homelab" ] && CONFIG_TARGET="$PARENT_DIR/config.env"
+
+if [ -f "$CONFIG_TARGET" ]; then
+    # shellcheck disable=SC1090
+    . "$CONFIG_TARGET"
+elif [ -f "${CONFIG_TARGET}.bak" ]; then
+    # shellcheck disable=SC1090
+    . "${CONFIG_TARGET}.bak"
 fi
 
 # 2. Network Autodetection
@@ -46,55 +49,94 @@ DEFAULT_GW="${DEFAULT_GW:-$(ip -4 route show default dev "$PHYSICAL_IF" 2>/dev/n
 [ -z "$DEFAULT_GW" ] && DEFAULT_GW="$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')"
 LAN_NETMASK="${LAN_NETMASK:-255.255.255.0}"
 
-# 3. Interactive First-Run Setup Wizard (Only if config.env does NOT exist and stdin is a TTY)
+# 3. Interactive Setup Wizard (Runs on first install, or when explicitly requested via 'homelab reconfigure')
 CONFIG_TARGET="/opt/homelab/config.env"
 [ ! -d "/opt/homelab" ] && CONFIG_TARGET="$PARENT_DIR/config.env"
 
-if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
+# Preserve previously saved settings as smart defaults
+PREV_AUTH_USER="${AUTH_USER:-admin}"
+PREV_AUTH_PASS="${AUTH_PASS:-}"
+PREV_BASE_DOMAIN="${BASE_DOMAIN:-lan}"
+PREV_TIMEZONE="${TIMEZONE:-Europe/Moscow}"
+PREV_STORAGE_BASE="${STORAGE_BASE:-/srv/storage}"
+PREV_GATEWAY_MODE="${GATEWAY_MODE:-yes}"
+PREV_PROXY_INPUT="${PROXY_INPUT:-direct}"
+PREV_ENABLE_VAULTWARDEN="${ENABLE_VAULTWARDEN:-no}"
+PREV_ENABLE_FORGEJO="${ENABLE_FORGEJO:-no}"
+PREV_ENABLE_CONDUIT="${ENABLE_CONDUIT:-no}"
+PREV_ENABLE_NAVIDROME="${ENABLE_NAVIDROME:-no}"
+PREV_ENABLE_TRANSMISSION="${ENABLE_TRANSMISSION:-no}"
+PREV_ENABLE_YTDLP="${ENABLE_YTDLP:-no}"
+PREV_ENABLE_SAMBA="${ENABLE_SAMBA:-no}"
+PREV_ENABLE_LXC_MANAGER="${ENABLE_LXC_MANAGER:-no}"
+PREV_ENABLE_ADGUARD_HOME="${ENABLE_ADGUARD_HOME:-no}"
+PREV_ENABLE_TAILSCALE="${ENABLE_TAILSCALE:-no}"
+
+if { [ ! -f "$CONFIG_TARGET" ] || [ "${RECONFIG_MODE:-0}" = "1" ]; } && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
     echo ""
     echo -e "${C_BLUE}================================================================${C_RESET}"
-    echo -e "${C_BLUE}    Alpine Homelab Appliance - Мастер Первоначальной Настройки  ${C_RESET}"
+    echo -e "${C_BLUE}    Alpine Homelab Appliance - Мастер Настройки                 ${C_RESET}"
     echo -e "${C_BLUE}================================================================${C_RESET}"
     echo -e "Обнаружена сеть: Интерфейс ${C_CYAN}$PHYSICAL_IF${C_RESET}, IP ${C_YELLOW}$IP_HOST${C_RESET}, Шлюз ${C_GREEN}$DEFAULT_GW${C_RESET}"
     echo ""
 
-    # 3.1 Username
-    printf "1. Имя пользователя для входа [Enter = admin]: "
+    # 3.1 Username (Sanitized to lowercase ASCII alphanumeric)
+    printf "1. Имя пользователя для входа [Enter = %s]: " "${PREV_AUTH_USER:-admin}"
     read -r IN_USER
-    AUTH_USER="${IN_USER:-admin}"
+    IN_USER="${IN_USER:-$PREV_AUTH_USER}"
+    CLEAN_USER=$(echo "$IN_USER" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
+    [ -z "$CLEAN_USER" ] && CLEAN_USER="admin"
+    if [ "$IN_USER" != "$CLEAN_USER" ]; then
+        echo -e "   ${C_YELLOW}[!] Предупреждение: имя пользователя исправлено на латиницу:${C_RESET} ${C_BOLD}$CLEAN_USER${C_RESET}"
+    fi
+    AUTH_USER="$CLEAN_USER"
 
     # 3.2 Password
-    printf "2. Пароль администратора [Enter = сгенерировать надежный 16-значный]: "
-    read -r IN_PASS
-    if [ -z "$IN_PASS" ]; then
-        AUTH_PASS="$(tr -dc 'a-zA-Z0-9' </dev/urandom 2>/dev/null | head -c 16 || echo "HomelabPass2026")"
-        echo -e "   ${C_GREEN}Сгенерирован пароль:${C_RESET} ${C_YELLOW}${C_BOLD}$AUTH_PASS${C_RESET}"
+    if [ -n "$PREV_AUTH_PASS" ]; then
+        printf "2. Пароль администратора [Enter = сохранить текущий]: "
+        read -r IN_PASS
+        if [ -z "$IN_PASS" ]; then
+            AUTH_PASS="$PREV_AUTH_PASS"
+            echo -e "   ${C_GREEN}Сохранен текущий пароль администратора.${C_RESET}"
+        else
+            AUTH_PASS="$IN_PASS"
+        fi
     else
-        AUTH_PASS="$IN_PASS"
+        printf "2. Пароль администратора [Enter = сгенерировать надежный 16-значный]: "
+        read -r IN_PASS
+        if [ -z "$IN_PASS" ]; then
+            AUTH_PASS="$(tr -dc 'a-zA-Z0-9' </dev/urandom 2>/dev/null | head -c 16 || echo "HomelabPass2026")"
+            echo -e "   ${C_GREEN}Сгенерирован пароль:${C_RESET} ${C_YELLOW}${C_BOLD}$AUTH_PASS${C_RESET}"
+        else
+            AUTH_PASS="$IN_PASS"
+        fi
     fi
 
     # 3.3 Domain
-    printf "3. Базовый домен для локальных HTTPS сайтов (*.lan) [Enter = lan]: "
+    printf "3. Базовый домен для локальных HTTPS сайтов (*.lan) [Enter = %s]: " "${PREV_BASE_DOMAIN:-lan}"
     read -r IN_DOM
-    BASE_DOMAIN="${IN_DOM:-lan}"
+    BASE_DOMAIN="${IN_DOM:-${PREV_BASE_DOMAIN:-lan}}"
 
     # 3.4 Timezone
-    printf "4. Системная таймзона [Enter = Europe/Moscow]: "
+    printf "4. Системная таймзона [Enter = %s]: " "${PREV_TIMEZONE:-Europe/Moscow}"
     read -r IN_TZ
-    TIMEZONE="${IN_TZ:-Europe/Moscow}"
+    TIMEZONE="${IN_TZ:-${PREV_TIMEZONE:-Europe/Moscow}}"
 
     # 3.5 Storage Base
-    printf "5. Путь к основному хранилищу медиа/файлов [Enter = /srv/storage]: "
+    printf "5. Путь к основному хранилищу медиа/файлов [Enter = %s]: " "${PREV_STORAGE_BASE:-/srv/storage}"
     read -r IN_STORE
-    STORAGE_BASE="${IN_STORE:-/srv/storage}"
+    STORAGE_BASE="${IN_STORE:-${PREV_STORAGE_BASE:-/srv/storage}}"
 
     # 3.6 Gateway mode
     echo ""
     echo -e "6. Режим работы шлюза сети:"
-    echo -e "   ${C_CYAN}1)${C_RESET} Домашний прозрачный шлюз (для ТВ, ПК, телефонов с обходом блокировок) [По умолчанию]"
+    gw_def="1"
+    [ "$PREV_GATEWAY_MODE" = "no" ] && gw_def="2"
+    echo -e "   ${C_CYAN}1)${C_RESET} Домашний прозрачный шлюз (для ТВ, ПК, телефонов с обходом блокировок)"
     echo -e "   ${C_CYAN}2)${C_RESET} Автономный сервер (только для работы сервисов на этом хосте)"
-    printf "   Ваш выбор [1-2, Enter = 1]: "
+    printf "   Ваш выбор [1-2, Enter = %s]: " "$gw_def"
     read -r IN_GW
+    IN_GW="${IN_GW:-$gw_def}"
     if [ "$IN_GW" = "2" ]; then
         GATEWAY_MODE="no"
     else
@@ -104,21 +146,36 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
     # 3.7 Proxy & Anti-censorship
     echo ""
     echo -e "7. Исходящее подключение для обхода блокировок (sing-box):"
-    echo -e "   ${C_CYAN}1)${C_RESET} Ввести отдельный сервер (${C_YELLOW}vless://${C_RESET}, ${C_YELLOW}ss://${C_RESET}, ${C_YELLOW}trojan://${C_RESET}, ${C_YELLOW}hy2://${C_RESET})"
-    echo -e "   ${C_CYAN}2)${C_RESET} Ввести URL подписки (${C_YELLOW}https://...${C_RESET} sing-box JSON, Clash или Base64)"
-    echo -e "   ${C_CYAN}3)${C_RESET} Прямое подключение без прокси (${C_YELLOW}direct${C_RESET}) [По умолчанию]"
-    printf "   Ваш выбор [1-3, Enter = 3]: "
-    read -r IN_PROXY
+    if [ -n "$PREV_PROXY_INPUT" ] && [ "$PREV_PROXY_INPUT" != "direct" ]; then
+        short_proxy=$(echo "$PREV_PROXY_INPUT" | cut -c1-65)
+        echo -e "   ${C_GREEN}0)${C_RESET} ${C_BOLD}Сохранить текущее подключение:${C_RESET} ${C_YELLOW}$short_proxy...${C_RESET} ${C_GREEN}[По умолчанию]${C_RESET}"
+        echo -e "   ${C_CYAN}1)${C_RESET} Ввести отдельный сервер (${C_YELLOW}vless://${C_RESET}, ${C_YELLOW}ss://${C_RESET}, ${C_YELLOW}trojan://${C_RESET}, ${C_YELLOW}hy2://${C_RESET})"
+        echo -e "   ${C_CYAN}2)${C_RESET} Ввести URL подписки (${C_YELLOW}https://...${C_RESET} sing-box JSON, Clash или Base64)"
+        echo -e "   ${C_CYAN}3)${C_RESET} Прямое подключение без прокси (${C_YELLOW}direct${C_RESET})"
+        printf "   Ваш выбор [0-3, Enter = 0]: "
+        read -r IN_PROXY
+        IN_PROXY="${IN_PROXY:-0}"
+    else
+        echo -e "   ${C_CYAN}1)${C_RESET} Ввести отдельный сервер (${C_YELLOW}vless://${C_RESET}, ${C_YELLOW}ss://${C_RESET}, ${C_YELLOW}trojan://${C_RESET}, ${C_YELLOW}hy2://${C_RESET})"
+        echo -e "   ${C_CYAN}2)${C_RESET} Ввести URL подписки (${C_YELLOW}https://...${C_RESET} sing-box JSON, Clash или Base64)"
+        echo -e "   ${C_CYAN}3)${C_RESET} Прямое подключение без прокси (${C_YELLOW}direct${C_RESET}) [По умолчанию]"
+        printf "   Ваш выбор [1-3, Enter = 3]: "
+        read -r IN_PROXY
+        IN_PROXY="${IN_PROXY:-3}"
+    fi
     case "$IN_PROXY" in
+        0)
+            PROXY_INPUT="$PREV_PROXY_INPUT"
+            ;;
         1)
             printf "   Вставьте строку подключения узла: "
             read -r USER_NODE
-            PROXY_INPUT="$USER_NODE"
+            PROXY_INPUT="${USER_NODE:-$PREV_PROXY_INPUT}"
             ;;
         2)
             printf "   Вставьте URL подписки: "
             read -r USER_SUB
-            PROXY_INPUT="$USER_SUB"
+            PROXY_INPUT="${USER_SUB:-$PREV_PROXY_INPUT}"
             ;;
         *)
             PROXY_INPUT="direct"
@@ -127,15 +184,69 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
     [ -z "$PROXY_INPUT" ] && PROXY_INPUT="direct"
 
     # 3.8 Service Stack Selection
+    curr_svcs=""
+    [ "$PREV_ENABLE_VAULTWARDEN" = "yes" ] && curr_svcs="${curr_svcs}Vaultwarden, "
+    [ "$PREV_ENABLE_FORGEJO" = "yes" ] && curr_svcs="${curr_svcs}Forgejo, "
+    [ "$PREV_ENABLE_CONDUIT" = "yes" ] && curr_svcs="${curr_svcs}Matrix, "
+    [ "$PREV_ENABLE_NAVIDROME" = "yes" ] && curr_svcs="${curr_svcs}Navidrome, "
+    [ "$PREV_ENABLE_TRANSMISSION" = "yes" ] && curr_svcs="${curr_svcs}Transmission, "
+    [ "$PREV_ENABLE_YTDLP" = "yes" ] && curr_svcs="${curr_svcs}MediaDownloader, "
+    [ "$PREV_ENABLE_SAMBA" = "yes" ] && curr_svcs="${curr_svcs}Samba, "
+    [ "$PREV_ENABLE_LXC_MANAGER" = "yes" ] && curr_svcs="${curr_svcs}LXC, "
+    [ "$PREV_ENABLE_ADGUARD_HOME" = "yes" ] && curr_svcs="${curr_svcs}AdGuardHome, "
+    [ "$PREV_ENABLE_TAILSCALE" = "yes" ] && curr_svcs="${curr_svcs}Tailscale, "
+    curr_svcs=$(echo "$curr_svcs" | sed 's/, $//')
+
+    curr_nums=""
+    [ "$PREV_ENABLE_VAULTWARDEN" = "yes" ] && curr_nums="${curr_nums}1,"
+    [ "$PREV_ENABLE_FORGEJO" = "yes" ] && curr_nums="${curr_nums}2,"
+    [ "$PREV_ENABLE_CONDUIT" = "yes" ] && curr_nums="${curr_nums}3,"
+    [ "$PREV_ENABLE_NAVIDROME" = "yes" ] && curr_nums="${curr_nums}4,"
+    [ "$PREV_ENABLE_TRANSMISSION" = "yes" ] && curr_nums="${curr_nums}5,"
+    [ "$PREV_ENABLE_YTDLP" = "yes" ] && curr_nums="${curr_nums}6,"
+    [ "$PREV_ENABLE_SAMBA" = "yes" ] && curr_nums="${curr_nums}7,"
+    [ "$PREV_ENABLE_LXC_MANAGER" = "yes" ] && curr_nums="${curr_nums}8,"
+    [ "$PREV_ENABLE_ADGUARD_HOME" = "yes" ] && curr_nums="${curr_nums}9,"
+    [ "$PREV_ENABLE_TAILSCALE" = "yes" ] && curr_nums="${curr_nums}10,"
+    curr_nums=$(echo "$curr_nums" | sed 's/,$//')
+
     echo ""
     echo -e "8. Набор устанавливаемых сервисов:"
-    echo -e "   ${C_CYAN}1)${C_RESET} Полный стек (9 сервисов + LXC, «всё включено», ~450 МБ RAM) [По умолчанию]"
-    echo -e "   ${C_CYAN}2)${C_RESET} Чистый сетевой шлюз (Caddy + sing-box, экономия RAM, ~45 МБ, без контейнеров)"
-    echo -e "   ${C_CYAN}3)${C_RESET} Шлюз + LXC Контейнеры (Caddy + sing-box + LXC Sandbox, ~150 МБ RAM)"
-    echo -e "   ${C_CYAN}4)${C_RESET} Выборочная установка (выбрать конкретные сервисы вручную)"
-    printf "   Ваш выбор [1-4, Enter = 1]: "
-    read -r IN_STACK
+    if [ -n "$curr_svcs" ]; then
+        echo -e "   ${C_GREEN}0)${C_RESET} ${C_BOLD}Сохранить текущий набор:${C_RESET} ${C_YELLOW}$curr_svcs${C_RESET} ${C_GREEN}[По умолчанию]${C_RESET}"
+        echo -e "   ${C_CYAN}1)${C_RESET} Полный стек (9 сервисов + LXC, «всё включено», ~450 МБ RAM)"
+        echo -e "   ${C_CYAN}2)${C_RESET} Чистый сетевой шлюз (Caddy + sing-box, экономия RAM, ~45 МБ, без контейнеров)"
+        echo -e "   ${C_CYAN}3)${C_RESET} Шлюз + LXC Контейнеры (Caddy + sing-box + LXC Sandbox, ~150 МБ RAM)"
+        echo -e "   ${C_CYAN}4)${C_RESET} Выборочная установка (выбрать конкретные сервисы вручную)"
+        printf "   Ваш выбор [0-4, Enter = 0]: "
+        read -r IN_STACK
+        IN_STACK="${IN_STACK:-0}"
+    else
+        echo -e "   ${C_CYAN}1)${C_RESET} Полный стек (9 сервисов + LXC, «всё включено», ~450 МБ RAM) [По умолчанию]"
+        echo -e "   ${C_CYAN}2)${C_RESET} Чистый сетевой шлюз (Caddy + sing-box, экономия RAM, ~45 МБ, без контейнеров)"
+        echo -e "   ${C_CYAN}3)${C_RESET} Шлюз + LXC Контейнеры (Caddy + sing-box + LXC Sandbox, ~150 МБ RAM)"
+        echo -e "   ${C_CYAN}4)${C_RESET} Выборочная установка (выбрать конкретные сервисы вручную)"
+        printf "   Ваш выбор [1-4, Enter = 1]: "
+        read -r IN_STACK
+        IN_STACK="${IN_STACK:-1}"
+    fi
+
     case "$IN_STACK" in
+        0)
+            ENABLE_CADDY="yes"
+            ENABLE_SINGBOX="yes"
+            ENABLE_DASHBOARD="yes"
+            ENABLE_LXC_MANAGER="${PREV_ENABLE_LXC_MANAGER:-no}"
+            ENABLE_VAULTWARDEN="${PREV_ENABLE_VAULTWARDEN:-no}"
+            ENABLE_FORGEJO="${PREV_ENABLE_FORGEJO:-no}"
+            ENABLE_CONDUIT="${PREV_ENABLE_CONDUIT:-no}"
+            ENABLE_NAVIDROME="${PREV_ENABLE_NAVIDROME:-no}"
+            ENABLE_TRANSMISSION="${PREV_ENABLE_TRANSMISSION:-no}"
+            ENABLE_SAMBA="${PREV_ENABLE_SAMBA:-no}"
+            ENABLE_YTDLP="${PREV_ENABLE_YTDLP:-no}"
+            ENABLE_ADGUARD_HOME="${PREV_ENABLE_ADGUARD_HOME:-no}"
+            ENABLE_TAILSCALE="${PREV_ENABLE_TAILSCALE:-no}"
+            ;;
         2)
             ENABLE_CADDY="yes"
             ENABLE_SINGBOX="yes"
@@ -194,8 +305,14 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
             echo -e "   ${C_WHITE}9)${C_RESET} AdGuard Home       (DNS блокировщик рекламы и трекеров)"
             echo -e "  ${C_WHITE}10)${C_RESET} Tailscale VPN      (Удаленный доступ Mesh VPN без белого IP)"
             echo ""
-            printf "   Введите номера через запятую (напр. 1,5,8) или Enter для пошаговых вопросов [y/N]: "
-            read -r IN_CUSTOM
+            if [ -n "$curr_nums" ]; then
+                printf "   Введите номера через запятую (напр. 1,5,8) [Enter = сохранить текущие: %s]: " "$curr_nums"
+                read -r IN_CUSTOM
+                IN_CUSTOM="${IN_CUSTOM:-$curr_nums}"
+            else
+                printf "   Введите номера через запятую (напр. 1,5,8) или Enter для пошаговых вопросов [y/N]: "
+                read -r IN_CUSTOM
+            fi
 
             if [ -n "$IN_CUSTOM" ]; then
                 for num in $(echo "$IN_CUSTOM" | tr ',' ' '); do
@@ -215,25 +332,30 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
             else
                 ask_svc() {
                     local prompt="$1"
+                    local prev_val="${2:-no}"
+                    local def_str="y/N"
+                    [ "$prev_val" = "yes" ] && def_str="Y/n"
                     local ans
-                    printf "   %s [y/N]: " "$prompt"
+                    printf "   %s [%s]: " "$prompt" "$def_str"
                     read -r ans
                     case "$ans" in
                         [yY]|[yY][eE][sS]|1) echo "yes" ;;
-                        *) echo "no" ;;
+                        [nN]|[nN][oO]|0) echo "no" ;;
+                        "") echo "$prev_val" ;;
+                        *) echo "$prev_val" ;;
                     esac
                 }
                 echo ""
-                ENABLE_VAULTWARDEN=$(ask_svc "1. Установить Vaultwarden (пароли Bitwarden)?")
-                ENABLE_FORGEJO=$(ask_svc "2. Установить Forgejo (Git-сервер)?")
-                ENABLE_CONDUIT=$(ask_svc "3. Установить Conduit (Matrix мессенджер)?")
-                ENABLE_NAVIDROME=$(ask_svc "4. Установить Navidrome (Музыка)?")
-                ENABLE_TRANSMISSION=$(ask_svc "5. Установить Transmission (Торренты)?")
-                ENABLE_YTDLP=$(ask_svc "6. Установить Media Downloader (yt-dlp)?")
-                ENABLE_SAMBA=$(ask_svc "7. Установить Samba / WSDD (Сетевые папки)?")
-                ENABLE_LXC_MANAGER=$(ask_svc "8. Установить LXC Sandbox (Контейнеры)?")
-                ENABLE_ADGUARD_HOME=$(ask_svc "9. Установить AdGuard Home (Блокировка рекламы)?")
-                ENABLE_TAILSCALE=$(ask_svc "10. Установить Tailscale Mesh VPN?")
+                ENABLE_VAULTWARDEN=$(ask_svc "1. Установить Vaultwarden (пароли Bitwarden)?" "$PREV_ENABLE_VAULTWARDEN")
+                ENABLE_FORGEJO=$(ask_svc "2. Установить Forgejo (Git-сервер)?" "$PREV_ENABLE_FORGEJO")
+                ENABLE_CONDUIT=$(ask_svc "3. Установить Conduit (Matrix мессенджер)?" "$PREV_ENABLE_CONDUIT")
+                ENABLE_NAVIDROME=$(ask_svc "4. Установить Navidrome (Музыка)?" "$PREV_ENABLE_NAVIDROME")
+                ENABLE_TRANSMISSION=$(ask_svc "5. Установить Transmission (Торренты)?" "$PREV_ENABLE_TRANSMISSION")
+                ENABLE_YTDLP=$(ask_svc "6. Установить Media Downloader (yt-dlp)?" "$PREV_ENABLE_YTDLP")
+                ENABLE_SAMBA=$(ask_svc "7. Установить Samba / WSDD (Сетевые папки)?" "$PREV_ENABLE_SAMBA")
+                ENABLE_LXC_MANAGER=$(ask_svc "8. Установить LXC Sandbox (Контейнеры)?" "$PREV_ENABLE_LXC_MANAGER")
+                ENABLE_ADGUARD_HOME=$(ask_svc "9. Установить AdGuard Home (Блокировка рекламы)?" "$PREV_ENABLE_ADGUARD_HOME")
+                ENABLE_TAILSCALE=$(ask_svc "10. Установить Tailscale Mesh VPN?" "$PREV_ENABLE_TAILSCALE")
             fi
             ;;
         *)
@@ -292,6 +414,10 @@ fi
 
 # 4. Final Fallbacks & Defaults (if not set by config.env or wizard)
 AUTH_USER="${AUTH_USER:-admin}"
+CLEAN_USER=$(echo "$AUTH_USER" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
+[ -z "$CLEAN_USER" ] && CLEAN_USER="admin"
+AUTH_USER="$CLEAN_USER"
+
 AUTH_PASS="${AUTH_PASS:-admin}"
 BASE_DOMAIN="${BASE_DOMAIN:-lan}"
 TIMEZONE="${TIMEZONE:-Europe/Moscow}"
