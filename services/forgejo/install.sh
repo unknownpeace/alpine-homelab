@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 log_info "Configuring Forgejo Git on 127.0.0.1:3000 (Domain: https://git.$BASE_DOMAIN, SSH: 2222)..."
 
 if ! command -v forgejo >/dev/null 2>&1; then
-    apk add --no-cache forgejo forgejo-openrc
+    apk_add forgejo forgejo-openrc
 fi
 
 mkdir -p /etc/forgejo /var/lib/forgejo/data

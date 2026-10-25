@@ -10,7 +10,9 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 
 log_info "Installing Tailscale Mesh VPN packages..."
 
-apk add --no-cache tailscale tailscale-openrc
+if ! command -v tailscale >/dev/null 2>&1; then
+    apk_add tailscale tailscale-openrc
+fi
 
 # Ensure TUN kernel module is active
 modprobe tun 2>/dev/null || true

@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 log_info "Configuring Samba and WSDD Network Discovery..."
 
 if ! command -v smbd >/dev/null 2>&1; then
-    apk add --no-cache samba-server samba-server-openrc samba-common-tools wsdd wsdd-openrc
+    apk_add samba-server samba-server-openrc samba-common-tools wsdd wsdd-openrc
 fi
 
 (echo "$AUTH_PASS"; echo "$AUTH_PASS") | smbpasswd -a -s "$AUTH_USER" 2>/dev/null || true

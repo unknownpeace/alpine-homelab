@@ -22,3 +22,17 @@ check_root() {
         exit 1
     fi
 }
+
+apk_add() {
+    local attempt=1
+    local max_attempts=3
+    until apk add --no-cache "$@"; do
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            log_error "Failed to install packages after $max_attempts attempts: $*"
+            return 1
+        fi
+        log_warn "Transient error during apk add (attempt $attempt/$max_attempts). Retrying in 2s..."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+}

@@ -10,7 +10,9 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 
 log_info "Deploying AdGuard Home DNS Engine and Statistics Dashboard..."
 
-apk add --no-cache adguardhome adguardhome-openrc
+if ! command -v /usr/bin/adguardhome >/dev/null 2>&1 && [ ! -f /usr/bin/adguardhome ]; then
+    apk_add adguardhome adguardhome-openrc
+fi
 
 mkdir -p /etc/adguardhome /var/lib/adguardhome
 

@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 log_info "Deploying LXC Sandbox Subsystem and Web Manager (Bottle WSGI + ttyd)..."
 
 if ! command -v lxc-create >/dev/null 2>&1 || ! command -v ttyd >/dev/null 2>&1; then
-    apk add --no-cache lxc lxc-openrc lxc-templates lxc-download rsync ttyd
+    apk_add lxc lxc-openrc lxc-templates lxc-download rsync ttyd
 fi
 
 mkdir -p /opt/lxc-manager /var/lib/lxc/cache

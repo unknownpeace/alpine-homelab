@@ -72,11 +72,4 @@ IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREA
 rc-update add sing-box default >/dev/null 2>&1 || true
 rc-service sing-box restart >/dev/null 2>&1 || true
 
-# 7. Configure host DNS resolution to point to local sing-box
-cat << EOF > /etc/resolv.conf
-nameserver 127.0.0.1
-nameserver 1.1.1.1
-nameserver 77.88.8.8
-EOF
-
 log_success "sing-box DNS and routing engine initialized (Domain: *.$BASE_DOMAIN)."

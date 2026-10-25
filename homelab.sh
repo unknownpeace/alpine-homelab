@@ -86,6 +86,16 @@ cmd_install() {
     [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && sh "$SERVICES_DIR/adguardhome/install.sh"
     [ "${ENABLE_TAILSCALE:-no}" = "yes" ] && sh "$SERVICES_DIR/tailscale/install.sh"
 
+    # Finalize host DNS resolver to local engine after all package downloads complete
+    if [ "${ENABLE_SINGBOX:-yes}" = "yes" ] || [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
+        log_info "Switching host resolver (/etc/resolv.conf) to local DNS engine..."
+        cat << EOF > /etc/resolv.conf
+nameserver 127.0.0.1
+nameserver 1.1.1.1
+nameserver 77.88.8.8
+EOF
+    fi
+
     # Print Summary Cheat Sheet
     cmd_summary
 }

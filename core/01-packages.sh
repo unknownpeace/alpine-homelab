@@ -13,7 +13,7 @@ if ! grep -q "^http.*/community" /etc/apk/repositories; then
 fi
 apk update
 
-apk add --no-cache \
+apk_add \
     ca-certificates curl tar gzip xz \
     libcap libcap-utils \
     tzdata alpine-conf \

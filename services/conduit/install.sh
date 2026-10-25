@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 log_info "Configuring Conduit Matrix on 127.0.0.1:6167 (Server: matrix.$BASE_DOMAIN)..."
 
 if ! command -v conduit >/dev/null 2>&1; then
-    apk add --no-cache conduit conduit-openrc
+    apk_add conduit conduit-openrc
 fi
 
 mkdir -p /etc/conduit /var/lib/conduit
