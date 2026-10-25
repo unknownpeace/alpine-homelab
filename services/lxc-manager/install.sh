@@ -28,6 +28,12 @@ fi
 ifup lxcbr0 2>/dev/null || true
 
 # Enable and start OpenRC cgroups and lxc services
+if ! grep -q "^root:100000:65536" /etc/subuid 2>/dev/null; then
+    echo "root:100000:65536" >> /etc/subuid
+fi
+if ! grep -q "^root:100000:65536" /etc/subgid 2>/dev/null; then
+    echo "root:100000:65536" >> /etc/subgid
+fi
 rc-update add cgroups sysinit >/dev/null 2>&1 || true
 rc-service cgroups start >/dev/null 2>&1 || true
 rc-update add lxc default >/dev/null 2>&1 || true

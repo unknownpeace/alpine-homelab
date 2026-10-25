@@ -119,6 +119,8 @@ cmd_install() {
     sync_service_state "${ENABLE_SAMBA:-no}" "$SERVICES_DIR/samba/install.sh" "samba" ""
     sync_service_state "${ENABLE_YTDLP:-no}" "$SERVICES_DIR/ytdlp-web/install.sh" "ytdlp-web" "ytdlp"
     sync_service_state "${ENABLE_LXC_MANAGER:-no}" "$SERVICES_DIR/lxc-manager/install.sh" "lxc-manager"
+    sync_service_state "${ENABLE_BESZEL:-yes}" "$SERVICES_DIR/beszel/install.sh" "beszel"
+    sync_service_state "${ENABLE_POCKET_ID:-no}" "$SERVICES_DIR/pocket-id/install.sh" "pocket-id"
     sync_service_state "${ENABLE_ADGUARD_HOME:-no}" "$SERVICES_DIR/adguardhome/install.sh" "adguardhome"
     sync_service_state "${ENABLE_TAILSCALE:-no}" "$SERVICES_DIR/tailscale/install.sh" "tailscale" ""
 
@@ -190,6 +192,8 @@ cmd_summary() {
     [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && sb_dns_info="5353 (upstream)"
     [ "${ENABLE_SINGBOX:-yes}" = "yes" ]     && echo -e "  sing-box UI/DNS : ${C_CYAN}https://proxy.$BASE_DOMAIN/ui/${C_RESET}    127.0.0.1:9090 (DNS: $sb_dns_info) ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}"
     [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && echo -e "  LXC Sandbox Mgr : ${C_CYAN}https://lxc.$BASE_DOMAIN${C_RESET}          127.0.0.1:8888, 7681     ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}  (LAN DHCP, Snapshots, ttyd)"
+    [ "${ENABLE_BESZEL:-yes}" = "yes" ]      && echo -e "  Beszel Monitor  : ${C_CYAN}https://monitor.$BASE_DOMAIN${C_RESET}      127.0.0.1:8090           Встроенная (SMART & Metrics)"
+    [ "${ENABLE_POCKET_ID:-no}" = "yes" ]    && echo -e "  Pocket ID (SSO) : ${C_CYAN}https://id.$BASE_DOMAIN${C_RESET}           127.0.0.1:1411           Passkeys / WebAuthn OIDC"
     [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && echo -e "  AdGuard Home    : ${C_CYAN}https://adguard.$BASE_DOMAIN${C_RESET}      127.0.0.1:3001 (DNS: 53) ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}"
     echo ""
     if [ "${ENABLE_SAMBA:-yes}" = "yes" ]; then
@@ -203,7 +207,7 @@ cmd_summary() {
     fi
     echo -e "${C_PURPLE}${C_BOLD}5. РЕЗЕРВНОЕ КОПИРОВАНИЕ И УДАЛЕННЫЙ ДОСТУП:${C_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  ${C_WHITE}Создать бэкап баз данных:${C_RESET} ${C_CYAN}homelab backup${C_RESET}           (в $STORAGE_BASE/backups)"
+    echo -e "  ${C_WHITE}Создать бэкап баз данных:${C_RESET} ${C_CYAN}homelab backup${C_RESET}           (в ${BACKUP_DIR:-/var/backups/homelab}, Restic + AES-256)"
     echo -e "  ${C_WHITE}Восстановить из бэкапа  :${C_RESET} ${C_CYAN}homelab restore <файл.tar.gz>${C_RESET}"
     echo -e "  ${C_WHITE}Удаленный доступ VPN    :${C_RESET} ${C_CYAN}homelab tailscale up${C_RESET}     (без белого IP)"
     echo ""
@@ -261,6 +265,8 @@ cmd_doctor() {
     [ "${ENABLE_SAMBA:-yes}" = "yes" ] && { check_svc "samba"; check_svc "wsdd"; }
     [ "${ENABLE_YTDLP:-yes}" = "yes" ] && check_svc "ytdlp-web"
     [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && { check_svc "lxc-manager"; check_svc "ttyd"; check_svc "lxc"; }
+    [ "${ENABLE_BESZEL:-yes}" = "yes" ] && [ -x /etc/init.d/beszel ] && check_svc "beszel"
+    [ "${ENABLE_POCKET_ID:-no}" = "yes" ] && [ -x /etc/init.d/pocket-id ] && check_svc "pocket-id"
     [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && check_svc "adguardhome"
     [ "${ENABLE_TAILSCALE:-no}" = "yes" ] && check_svc "tailscale"
 
@@ -390,7 +396,9 @@ get_service_log_file() {
         lxc|lxc-manager) echo "/var/log/lxc-manager.log" ;;
         ttyd) echo "/var/log/ttyd.log" ;;
         adguard|adguardhome) echo "/var/log/adguardhome.log" ;;
-        conduit) echo "/var/log/conduit.log" ;;
+        beszel|monitor) echo "/var/log/beszel.log" ;;
+        pocket-id|pocketid) echo "/var/log/pocket-id.log" ;;
+        conduit|tuwunel) echo "/var/log/conduit.log" ;;
         samba|smbd)
             local cand
             cand=$(ls -t /var/log/samba/*.log 2>/dev/null | head -n1)
@@ -451,15 +459,16 @@ cmd_service() {
 
 cmd_backup() {
     check_root
-    local dest="${1:-$STORAGE_BASE/backups}"
-    mkdir -p "$dest"
+    local dest="${1:-${BACKUP_DIR:-/var/backups/homelab}}"
+    mkdir -p "$dest" /etc/homelab
+    chmod 700 "$dest" /etc/homelab
     local ts
     ts="$(date +%Y%m%d_%H%M%S)"
     local target="$dest/homelab_backup_$ts.tar.gz"
     local tmp
     tmp="$(mktemp -d)"
 
-    log_info "Creating atomic disaster recovery backup to $target..."
+    log_info "Creating atomic disaster recovery backup in isolated vault $dest..."
 
     # 1. Hot SQLite databases
     if [ -f /var/lib/vaultwarden/db.sqlite3 ]; then
@@ -518,11 +527,36 @@ cmd_backup() {
     [ -f "/etc/nftables.nft" ] && cp -f "/etc/nftables.nft" "$tmp/system/nftables.nft"
     [ -d "/var/lib/caddy/.local/share/caddy/pki" ] && cp -rf "/var/lib/caddy/.local/share/caddy/pki" "$tmp/system/pki"
 
-    # 7. Compress
+    # 7. Compress atomic snapshot archive (chmod 600)
     tar -czf "$target" -C "$tmp" .
+    chmod 600 "$target"
+
+    # 8. Restic Encrypted Deduplicated Repository (3-2-1 Standard)
+    if command -v restic >/dev/null 2>&1; then
+        local key_file="/etc/homelab/restic.key"
+        if [ ! -f "$key_file" ]; then
+            tr -dc 'a-zA-Z0-9' </dev/urandom 2>/dev/null | head -c 32 > "$key_file" || echo "${AUTH_PASS:-HomelabBackup2026}" > "$key_file"
+            chmod 600 "$key_file"
+        fi
+        local restic_repo="$dest/restic-repo"
+        if [ ! -f "$restic_repo/config" ]; then
+            log_info "Initializing encrypted Restic repository at $restic_repo..."
+            restic -r "$restic_repo" --password-file "$key_file" init >/dev/null 2>&1 || true
+        fi
+        log_info "Committing deduplicated encrypted snapshot to Restic repository..."
+        restic -r "$restic_repo" --password-file "$key_file" backup "$tmp" --tag "homelab-auto" >/dev/null 2>&1 || true
+        restic -r "$restic_repo" --password-file "$key_file" forget --keep-daily 7 --keep-weekly 4 --prune >/dev/null 2>&1 || true
+
+        if [ -n "${BACKUP_REMOTE_REPO:-}" ]; then
+            log_info "Syncing encrypted Restic snapshot to remote 3-2-1 target ($BACKUP_REMOTE_REPO)..."
+            restic -r "$BACKUP_REMOTE_REPO" --password-file "$key_file" init >/dev/null 2>&1 || true
+            restic -r "$BACKUP_REMOTE_REPO" --password-file "$key_file" backup "$tmp" --tag "homelab-offsite" >/dev/null 2>&1 || log_warn "Remote Restic sync failed."
+        fi
+    fi
+
     rm -rf "$tmp"
 
-    # 8. Rotation (keep 7 newest)
+    # 9. Rotation of local tarballs (keep 7 newest)
     find "$dest" -maxdepth 1 -name "homelab_backup_*.tar.gz" | sort -r | tail -n +8 | xargs rm -f 2>/dev/null || true
 
     log_success "Backup created: $target ($(du -h "$target" | awk '{print $1}'))"
@@ -750,11 +784,23 @@ cmd_proxy() {
     if [ -n "$input" ]; then
         log_info "Updating outbound proxy connection..."
         if [ -f "$ROOT_DIR/config.env" ]; then
-            if grep -q "^PROXY_INPUT=" "$ROOT_DIR/config.env"; then
-                sed -i "s|^PROXY_INPUT=.*|PROXY_INPUT=\"$input\"|" "$ROOT_DIR/config.env"
-            else
-                echo "PROXY_INPUT=\"$input\"" >> "$ROOT_DIR/config.env"
-            fi
+            python3 -c '
+import sys
+path, val = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+out, found = [], False
+for line in lines:
+    if line.strip().startswith("PROXY_INPUT="):
+        out.append(f"PROXY_INPUT=\"{val}\"\n")
+        found = True
+    else:
+        out.append(line)
+if not found:
+    out.append(f"PROXY_INPUT=\"{val}\"\n")
+with open(path, "w", encoding="utf-8") as f:
+    f.writelines(out)
+' "$ROOT_DIR/config.env" "$input"
         fi
         /usr/local/bin/update-sub.py "$input"
     else

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import sys, os, subprocess, json, threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 
 os.umask(0o002)
@@ -56,7 +56,7 @@ class SimpleYTDLHandler(BaseHTTPRequestHandler):
             if folder not in ['downloads', 'music']:
                 folder = 'downloads'
 
-            if url:
+            if url and url.lower().startswith(('http://', 'https://')):
                 target_dir = os.path.join(STORAGE_DIR, folder)
                 os.makedirs(target_dir, exist_ok=True)
                 def run_dl(u, d):
@@ -65,6 +65,7 @@ class SimpleYTDLHandler(BaseHTTPRequestHandler):
                         "-P", d,
                         "-o", "%(title)s.%(ext)s",
                         "--no-playlist",
+                        "--",
                         u
                     ]
                     subprocess.run(cmd)
@@ -79,5 +80,5 @@ class SimpleYTDLHandler(BaseHTTPRequestHandler):
             self.wfile.write(resp.encode('utf-8'))
 
 if __name__ == '__main__':
-    server = HTTPServer(('127.0.0.1', 8080), SimpleYTDLHandler)
+    server = ThreadingHTTPServer(('127.0.0.1', 8080), SimpleYTDLHandler)
     server.serve_forever()

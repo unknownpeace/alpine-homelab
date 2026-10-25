@@ -19,7 +19,9 @@
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; }
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background-color: #020617; color: #f1f5f9; margin: 0; }
+        .hidden { display: none !important; }
+        a { color: inherit; text-decoration: none; }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-indigo-500 selection:text-white">
@@ -268,6 +270,38 @@
                     </div>
                 </a>
 
+                                <!-- Beszel Monitoring (2026) -->
+                <a href="https://monitor.lan" target="_blank" data-service="beszel" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">📊</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">SMART &amp; Metrics :8090</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Beszel Monitoring</h3>
+                        <p class="text-xs text-slate-400 mt-1">Исторический мониторинг CPU, RAM, температуры, SMART-дисков и уведомлений.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>monitor.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- Pocket ID Passkey OIDC (2026) -->
+                <a href="https://id.lan" target="_blank" data-service="pocketid" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">🔑</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">Passkey OIDC :1411</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Pocket ID (SSO)</h3>
+                        <p class="text-xs text-slate-400 mt-1">Беспарольный провайдер единого входа (OpenID Connect) по Passkeys и WebAuthn.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>id.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
                 <!-- AdGuard Home -->
                 <a href="https://adguard.lan" target="_blank" data-service="adguardhome" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
                     <div>
@@ -327,7 +361,7 @@
     </main>
 
     <footer class="border-t border-slate-800 py-6 text-center text-xs text-slate-500 font-mono">
-        Alpine Linux 3.24 &bull; OpenRC Supervised &bull; Zero-Docker Homelab
+        Alpine Linux 3.24.3 &bull; OpenRC Supervised &bull; Zero-Docker Homelab
     </footer>
 
     <script src="env-config.js"></script>
@@ -626,6 +660,5 @@
             </form>
         </div>
     </div>
-    </script>
 </body>
 </html>

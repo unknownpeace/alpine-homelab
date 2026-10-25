@@ -24,8 +24,12 @@ import time
 import shutil
 import platform
 import threading
+import logging
 import subprocess
 import urllib.request
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger('lxc-manager')
 from bottle import Bottle, request, response, static_file, abort
 
 app = Bottle()
@@ -563,6 +567,14 @@ def get_host_metrics():
 # REST API Endpoints
 # -----------------------------------------------------------------------------
 
+@app.hook("before_request")
+def validate_container_route_param():
+    m = re.match(r"^/api/containers/([^/]+)(?:/|$)", request.path)
+    if m:
+        seg = m.group(1)
+        if seg not in ("create", "import", "backups") and not re.match(r"^[a-zA-Z0-9_\-]{2,32}$", seg):
+            abort(400, "Invalid container name parameter.")
+
 @app.route("/api/status", method="GET")
 def api_status():
     response.content_type = "application/json"
@@ -629,7 +641,7 @@ def api_template_download():
         try:
             if distro == "alpine" and release in ["3.24", "current", "latest"]:
                 os.makedirs(os.path.join(LXC_DIR, "cache"), exist_ok=True)
-                url = os.environ.get("MINIROOTFS_URL", "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz")
+                url = os.environ.get("MINIROOTFS_URL", "https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-minirootfs-3.24.3-x86_64.tar.gz")
                 cmd = ["curl", "-fL", "--retry", "3", "--connect-timeout", "15", url, "-o", MINIROOTFS_CACHE]
                 code, out, err = run_cmd(cmd, timeout=120)
                 if code == 0 and os.path.exists(MINIROOTFS_CACHE) and os.path.getsize(MINIROOTFS_CACHE) > 0:
@@ -861,6 +873,9 @@ lxc.net.0.ipv4.gateway = 10.0.3.1"""
             nesting_cfg = ""
             if nesting:
                 nesting_cfg = "# Nesting support (Docker / Podman inside LXC)\nlxc.include = /usr/share/lxc/config/nesting.conf\n"
+            unpriv_env = os.environ.get("LXC_UNPRIVILEGED", "no").lower() == "yes"
+            if bool(data.get("unprivileged", unpriv_env)) and os.path.exists("/etc/subuid"):
+                nesting_cfg += "# Unprivileged user namespace mapping\nlxc.idmap = u 0 100000 65536\nlxc.idmap = g 0 100000 65536\n"
             mount_auto = "proc:mixed sys:rw cgroup:mixed" if nesting else "proc:mixed sys:ro cgroup:mixed"
 
             config_content = f"""lxc.uts.name = {name}
@@ -1338,18 +1353,21 @@ def api_create_port(name):
 @app.route("/api/containers/<name>/ports/<host_port:int>", method="DELETE")
 def api_delete_port(name, host_port):
     response.content_type = "application/json"
+    req_proto = request.query.get("proto", "").strip().lower()
     forwards = load_port_forwards()
     target_entry = None
     for f in forwards:
         if f.get("container") == name and f.get("host_port") == host_port:
-            target_entry = f
-            break
+            if not req_proto or f.get("proto", "tcp") == req_proto:
+                target_entry = f
+                break
 
     if not target_entry:
         return {"success": False, "error": "Правило проброса не найдено."}
 
-    apply_nft_dnat("delete", host_port, target_entry.get("target_ip", "0.0.0.0"), target_entry.get("container_port", host_port), target_entry.get("proto", "tcp"))
-    forwards = [f for f in forwards if not (f.get("container") == name and f.get("host_port") == host_port)]
+    entry_proto = target_entry.get("proto", "tcp")
+    apply_nft_dnat("delete", host_port, target_entry.get("target_ip", "0.0.0.0"), target_entry.get("container_port", host_port), entry_proto)
+    forwards = [f for f in forwards if not (f.get("container") == name and f.get("host_port") == host_port and f.get("proto", "tcp") == entry_proto)]
     save_port_forwards(forwards)
     return {"success": True, "message": f"Проброс порта {host_port} удален."}
 
@@ -1357,15 +1375,21 @@ def api_delete_port(name, host_port):
 # Phase 3: Inline Rootfs File Explorer & Web Code Editor
 # -----------------------------------------------------------------------------
 
+def is_valid_container_name(name):
+    return bool(name and re.match(r"^[a-zA-Z0-9_\-]{2,32}$", str(name)))
+
 def resolve_container_fs_path(name, req_path):
-    rootfs_dir = os.path.join(LXC_DIR, name, "rootfs")
+    if not is_valid_container_name(name):
+        return None, None
+    rootfs_dir = os.path.realpath(os.path.join(LXC_DIR, name, "rootfs"))
     if not os.path.exists(rootfs_dir):
         return None, None
     safe_rel = os.path.normpath("/" + req_path.lstrip("/")).lstrip("/")
-    full_path = os.path.abspath(os.path.join(rootfs_dir, safe_rel))
-    if os.path.commonpath([full_path, rootfs_dir]) != rootfs_dir:
+    candidate = os.path.abspath(os.path.join(rootfs_dir, safe_rel))
+    real_full = os.path.realpath(candidate)
+    if os.path.commonpath([real_full, rootfs_dir]) != rootfs_dir:
         return None, None
-    return full_path, "/" + safe_rel
+    return real_full, "/" + safe_rel
 
 @app.route("/api/containers/<name>/fs/list", method="GET")
 def api_fs_list(name):
@@ -1607,7 +1631,8 @@ def api_import():
     finally:
         if os.path.exists(tmp_archive):
             os.remove(tmp_archive)
-        shutil.rmtree(f"/tmp/extract-{clean_name}", ignore_errors=True)
+        if 'tmp_extract' in locals() and os.path.exists(tmp_extract):
+            shutil.rmtree(tmp_extract, ignore_errors=True)
 
 # -----------------------------------------------------------------------------
 # Container Standard Actions
@@ -1872,10 +1897,26 @@ def get_proxy_info():
         "outbounds": outbounds_list
     }
 
+def mask_proxy_secret(raw_val):
+    if not raw_val or raw_val.strip().lower() == "direct":
+        return "direct"
+    val = raw_val.strip()
+    if "://" in val:
+        scheme, rest = val.split("://", 1)
+        if "@" in rest:
+            _, hostpart = rest.split("@", 1)
+            host_only = hostpart.split("?")[0].split("#")[0]
+            return f"{scheme}://***@{host_only}"
+        return f"{scheme}://{rest[:12]}***"
+    return "***"
+
 @app.route("/api/proxy/status", method="GET")
 def api_proxy_status():
     response.content_type = "application/json"
     info = get_proxy_info()
+    # Mask sensitive proxy UUIDs/tokens if request is unauthenticated (e.g. public dashboard banner)
+    if not request.headers.get("Authorization"):
+        info["proxy_input"] = mask_proxy_secret(info.get("proxy_input", ""))
     return {"success": True, **info}
 
 @app.route("/api/proxy/check", method=["GET", "POST"])
@@ -2342,7 +2383,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <label class="block text-[11px] text-slate-400 mb-1">Желаемый поддомен</label>
                         <div class="flex items-center gap-1">
                             <input type="text" id="route-subdomain-input" required placeholder="my-app" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white font-mono">
-                            <span class="text-slate-500 font-mono text-[11px]" id="route-domain-suffix">.uwu</span>
+                            <span class="text-slate-500 font-mono text-[11px]" id="route-domain-suffix">.lan</span>
                         </div>
                     </div>
                     <div>
@@ -2697,7 +2738,7 @@ INDEX_HTML = """<!DOCTYPE html>
         let catalogData = {};
         let cachedImagesList = [];
         let templatePollTimer = null;
-        let hostBaseDomain = 'uwu';
+        let hostBaseDomain = 'lan';
 
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
@@ -4107,4 +4148,10 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    app.run(host="127.0.0.1", port=8888, server=ThreadedWSGIServerAdapter)
+    try:
+        import waitress
+        logger.info("Starting LXC Manager 2.0 on 127.0.0.1:8888 via production Waitress WSGI server...")
+        waitress.serve(app, host="127.0.0.1", port=8888, threads=8)
+    except ImportError:
+        logger.info("Starting LXC Manager 2.0 on 127.0.0.1:8888 via ThreadedWSGIServerAdapter...")
+        app.run(host="127.0.0.1", port=8888, server=ThreadedWSGIServerAdapter)

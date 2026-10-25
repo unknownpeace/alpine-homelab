@@ -46,9 +46,9 @@ rules_map = {
 }
 backup_rules_map = {
     "geoip-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/rule-set-geoip/geoip-ru.srs",
-    "geosite-tld-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-tld-ru.srs",
-    "geosite-category-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-category-ru.srs",
-    "geosite-ru-blocked.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat@release/sing-box/rule-set-geosite/geosite-ru-blocked.srs",
+    "geosite-tld-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/rule-set-geosite/geosite-tld-ru.srs",
+    "geosite-category-ru.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/rule-set-geosite/geosite-category-ru.srs",
+    "geosite-ru-blocked.srs": "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/rule-set-geosite/geosite-ru-blocked.srs",
     "geosite-category-ai.srs": "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ai-!cn.srs",
 }
 for rfile, main_url in rules_map.items():
@@ -398,6 +398,9 @@ predefined_hosts = {
     f"proxy.{BASE_DOMAIN}": IP_HOST,
     f"lxc.{BASE_DOMAIN}": IP_HOST,
     f"adguard.{BASE_DOMAIN}": IP_HOST,
+    f"monitor.{BASE_DOMAIN}": IP_HOST,
+    f"id.{BASE_DOMAIN}": IP_HOST,
+    f"auth.{BASE_DOMAIN}": IP_HOST,
     f"homelab.{BASE_DOMAIN}": IP_HOST,
     "homelab": IP_HOST,
     "homelab.lan": IP_HOST
@@ -434,7 +437,8 @@ config = {
         ],
         "rules": dns_rules,
         "final": "remote-dns",
-        "strategy": "prefer_ipv4"
+        "strategy": "prefer_ipv4",
+        "independent_cache": True
     },
     "inbounds": [
         {
@@ -445,8 +449,7 @@ config = {
             "auto_route": True,
             "auto_redirect": True,
             "strict_route": False,
-            "stack": "mixed",
-            "dns_mode": tun_dns_mode
+            "stack": "mixed"
         },
         {
             "type": "direct",
@@ -497,6 +500,7 @@ config = {
             [
                 {"action": "sniff"},
                 {"inbound": "dns-in", "action": "hijack-dns"},
+                ({"protocol": "dns", "port": 53, "action": "hijack-dns"} if not ADGUARD_ENABLED else {"inbound": "dns-in", "action": "hijack-dns"}),
                 {"protocol": "bittorrent", "outbound": "Torrent"},
                 {"ip_is_private": True, "outbound": "direct"},
                 {"ip_cidr": ["100.64.0.0/10"], "outbound": "direct"}

@@ -38,10 +38,7 @@ http:
 users:
 EOF
     if [ -n "$PASS_HASH" ]; then
-        cat << EOF >> "$AGH_CONFIG"
-  - name: $AUTH_USER
-    password: $PASS_HASH
-EOF
+        printf "  - name: %s\n    password: '%s'\n" "$AUTH_USER" "$PASS_HASH" >> "$AGH_CONFIG"
     fi
     cat << EOF >> "$AGH_CONFIG"
 auth_attempts: 5
@@ -92,9 +89,9 @@ dns:
   cache_size: 4194304
   cache_ttl_min: 0
   cache_ttl_max: 0
-  cache_optimistic: false
+  cache_optimistic: true
   bogus_nxdomain: []
-  aaaa_disabled: false
+  aaaa_disabled: true
   enable_dnssec: false
   edns_client_subnet:
     custom_ip: ""

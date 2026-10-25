@@ -18,8 +18,8 @@ apk_add \
     libcap libcap-utils \
     tzdata alpine-conf \
     nftables nftables-openrc \
-    python3 py3-requests py3-bottle \
-    bridge sqlite git
+    python3 py3-requests py3-bottle py3-waitress \
+    bridge sqlite git openssl restic
 
 # Apply system timezone if configured
 if [ -n "$TIMEZONE" ]; then

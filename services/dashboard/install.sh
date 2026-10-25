@@ -31,6 +31,9 @@ window.__HOMELAB_CONFIG__ = {
   ytdlp: "${ENABLE_YTDLP:-yes}",
   conduit: "${ENABLE_CONDUIT:-yes}",
   samba: "${ENABLE_SAMBA:-yes}",
+  beszel: "${ENABLE_BESZEL:-yes}",
+  pocketid: "${ENABLE_POCKET_ID:-no}",
+  crowdsec: "${ENABLE_CROWDSEC:-no}",
   adguardhome: "${ENABLE_ADGUARD_HOME:-no}",
   tailscale: "${ENABLE_TAILSCALE:-no}",
   ram_estimate: "$RAM_EST"

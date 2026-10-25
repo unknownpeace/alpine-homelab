@@ -100,6 +100,7 @@ def test_service_logs():
         "ytdlp-web": ["/var/log/ytdlp-web.log"],
         "lxc-manager": ["/var/log/lxc-manager.log"],
         "conduit": ["/var/log/conduit.log"],
+        "beszel": ["/var/log/beszel.log"],
         "wsdd": ["/var/log/wsdd.log"]
     }
 
@@ -181,6 +182,7 @@ def test_https_endpoints(cfg):
         (f"https://ytdl.{base_dom}/", (user, pwd), [200]),
         (f"https://proxy.{base_dom}/ui/", (user, pwd), [200, 302]),
         (f"https://lxc.{base_dom}/", (user, pwd), [200]),
+        (f"https://monitor.{base_dom}/", None, [200, 302, 401]),
     ]
 
     for url, auth, allowed_codes in endpoints:
