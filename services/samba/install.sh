@@ -17,14 +17,18 @@ fi
 (echo "$AUTH_PASS"; echo "$AUTH_PASS") | smbpasswd -a -s "$AUTH_USER" 2>/dev/null || true
 smbpasswd -e "$AUTH_USER" 2>/dev/null || true
 
+mkdir -p "$STORAGE_BASE/timemachine"
+chown -R "${SAFE_USER:-admin}:media" "$STORAGE_BASE/timemachine" 2>/dev/null || true
+chmod 2770 "$STORAGE_BASE/timemachine" 2>/dev/null || true
+
 cat << EOF > /etc/samba/smb.conf
 [global]
     workgroup = WORKGROUP
     netbios name = HOMELAB
-    server string = Homelab Baremetal Appliance
+    server string = Alpine Homelab NAS (SMB3 & Apple TimeMachine)
     server role = standalone server
     security = user
-    map to guest = Never
+    map to guest = Bad User
     dns proxy = no
     log file = /var/log/samba/%m.log
     max log size = 50
@@ -32,12 +36,43 @@ cat << EOF > /etc/samba/smb.conf
     printing = bsd
     printcap name = /dev/null
     disable spoolss = yes
-    server min protocol = SMB2_10
-    server max protocol = SMB3
-    server signing = auto
-    smb encrypt = auto
+
+    # SMB3 & Multi-Channel performance tuning (Windows 10/11 & macOS)
+    server min protocol = SMB3_00
+    server multi channel support = yes
+    smb2 leases = yes
+    oplocks = yes
+    kernel oplocks = no
+    strict locking = no
+    posix locking = no
+
+    # Zero-copy sendfile & async I/O
+    use sendfile = yes
+    aio read size = 1
+    aio write size = 1
+    min receivefile size = 16384
     ea support = yes
-    vfs objects = streams_xattr
+
+    # Apple macOS VFS enhancements
+    vfs objects = catia fruit streams_xattr
+    fruit:aapl = yes
+    fruit:model = MacSamba
+    fruit:metadata = stream
+    fruit:resource = file
+    fruit:zero_file_id = yes
+    fruit:nfs_aces = no
+    fruit:copyfile = yes
+    fruit:wipe_intentionally_left_blank_rfork = yes
+    fruit:delete_empty_adfiles = yes
+    fruit:veto_appledouble = no
+    readdir_attr:aapl_rsize = yes
+    readdir_attr:aapl_finder_info = yes
+    readdir_attr:aapl_max_access = no
+    spotlight backend = noindex
+
+    # Veto unwanted junk files
+    veto files = /Thumbs.db/.DS_Store/desktop.ini/
+    delete veto files = yes
 
 [Storage]
     path = $STORAGE_BASE
@@ -71,6 +106,22 @@ cat << EOF > /etc/samba/smb.conf
     read only = no
     force create mode = 0664
     force directory mode = 2775
+
+[TimeMachine]
+    comment = Apple macOS Time Machine Backup
+    path = $STORAGE_BASE/timemachine
+    browseable = yes
+    writable = yes
+    valid users = $AUTH_USER
+    force user = $AUTH_USER
+    force group = media
+    read only = no
+    create mask = 0600
+    directory mask = 0700
+    vfs objects = catia fruit streams_xattr
+    fruit:time machine = yes
+    fruit:time machine max size = 500G
+    dfree command =
 EOF
 
 rc-update add samba default >/dev/null 2>&1 || true

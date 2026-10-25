@@ -42,11 +42,19 @@ database_backend = "rocksdb"
 database_path = "/var/lib/conduit"
 address = "127.0.0.1"
 port = 6167
+db_cache_capacity_mb = 24.0
+pdu_cache_capacity = 50000
+cleanup_second_interval = 3600
+rocksdb_compression_algo = "zstd"
+max_request_size = 52_428_800
 allow_registration = true
 registration_token = "$REG_TOKEN"
 allow_federation = false
 trusted_servers = []
-max_request_size = 20_000_000
+
+[global.well_known]
+client = "https://matrix.$BASE_DOMAIN"
+server = "matrix.$BASE_DOMAIN:443"
 EOF
 
 chown -R conduit:conduit /var/lib/conduit /etc/conduit

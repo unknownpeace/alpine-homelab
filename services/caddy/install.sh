@@ -25,6 +25,9 @@ rm -f /etc/caddy/conf.d/*.conf
 
 cat << EOF > /etc/caddy/Caddyfile
 {
+    servers {
+        protocols h1 h2 h3
+    }
     local_certs
     skip_install_trust
     log {
@@ -58,6 +61,52 @@ cat << EOF > /etc/caddy/Caddyfile
     }
 }
 
+(common_optimizations) {
+    import security_headers
+    import access_log
+    encode zstd gzip
+    handle_errors {
+        @custom_err expression `{err.status_code} in [404, 500, 502, 503, 504]`
+        handle @custom_err {
+            header Content-Type "text/html; charset=utf-8"
+            header Cache-Control "no-store"
+            respond `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{err.status_code} — {err.status_text}</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: #0f111a; color: #e2e8f0; font-family: system-ui, -apple-system, sans-serif; }
+  .card { max-width: 460px; width: 90%; padding: 32px; background: #181b28;
+          border: 1px solid #2d334a; border-radius: 14px; box-shadow: 0 20px 40px rgba(0,0,0,0.45); }
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(239,68,68,0.15);
+           color: #f87171; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.05em; }
+  h1 { margin: 16px 0 8px; font-size: 1.75rem; color: #ffffff; }
+  p { margin: 0 0 20px; color: #94a3b8; line-height: 1.6; font-size: 0.95rem; }
+  .meta { padding: 12px; background: #0f111a; border-radius: 8px; font-family: monospace;
+          font-size: 0.8rem; color: #64748b; overflow-x: auto; margin-bottom: 20px; }
+  .btn { display: inline-block; padding: 10px 18px; background: #2563eb; color: #fff;
+         text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 0.9rem; }
+  .btn:hover { background: #1d4ed8; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <span class="badge">HTTP {err.status_code}</span>
+    <h1>{err.status_text}</h1>
+    <p>Сервис временно перезапускается супервизором OpenRC или запрошенный ресурс не существует на узле.</p>
+    <div class="meta">Host: {http.request.host}<br>URI: {http.request.uri}</div>
+    <a class="btn" href="javascript:location.reload()">Повторить запрос</a>
+  </div>
+</body>
+</html>` {err.status_code}
+        }
+    }
+}
+
 (homelab_auth) {
     basic_auth {
         $AUTH_USER $RAW_HASH
@@ -65,8 +114,7 @@ cat << EOF > /etc/caddy/Caddyfile
 }
 
 homelab.$BASE_DOMAIN, $IP_HOST {
-    import security_headers
-    import access_log
+    import common_optimizations
     handle /api/proxy/update {
         import homelab_auth
         reverse_proxy 127.0.0.1:8888

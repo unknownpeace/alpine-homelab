@@ -1,4 +1,15 @@
 music.__BASE_DOMAIN__ {
-    import security_headers
-    reverse_proxy 127.0.0.1:4533
+    import common_optimizations
+    @sse path /api/events*
+    handle @sse {
+        reverse_proxy 127.0.0.1:4533 {
+            flush_interval -1
+            transport http {
+                read_timeout 3600s
+            }
+        }
+    }
+    handle {
+        reverse_proxy 127.0.0.1:4533
+    }
 }

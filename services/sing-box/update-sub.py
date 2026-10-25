@@ -418,6 +418,14 @@ dns_rules.extend([
     {"rule_set": ["geosite-tld-ru", "geosite-category-ru"], "server": "direct-dns"}
 ])
 
+os.makedirs("/etc/sing-box", exist_ok=True)
+if not os.path.exists("/etc/sing-box/lxc.hosts"):
+    try:
+        with open("/etc/sing-box/lxc.hosts", "w") as f:
+            f.write("# LXC Dynamic Hosts\n")
+    except Exception:
+        pass
+
 config = {
     "log": {
         "level": "info",
@@ -429,6 +437,7 @@ config = {
             {
                 "tag": "hosts-lan",
                 "type": "hosts",
+                "path": ["/etc/hosts", "/etc/sing-box/lxc.hosts"],
                 "predefined": predefined_hosts
             },
             {"tag": "ai-dns", "type": "tls", "server": DNS_SECONDARY, "detour": "🤖 Нейросети"},

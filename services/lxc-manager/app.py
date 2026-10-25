@@ -164,6 +164,20 @@ def save_port_forwards(forwards):
     with open(PORT_FORWARDS_FILE, "w", encoding="utf-8") as f:
         json.dump(forwards, f, indent=2, ensure_ascii=False)
 
+def trigger_singbox_dns_sync(wait_for_ip_seconds: float = 2.5) -> None:
+    """Асинхронно обновляет /etc/sing-box/lxc.hosts и отправляет SIGHUP в sing-box."""
+    def _worker():
+        if wait_for_ip_seconds > 0:
+            time.sleep(wait_for_ip_seconds)
+        if os.path.exists("/usr/local/bin/lxc-dns-sync.sh"):
+            subprocess.run(
+                ["/usr/local/bin/lxc-dns-sync.sh"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False
+            )
+    threading.Thread(target=_worker, daemon=True).start()
+
 def apply_nft_dnat(action, host_port, container_ip, container_port, proto="tcp", comment=""):
     host_ip = get_host_ip()
     proto = str(proto).lower().strip()
@@ -1079,6 +1093,7 @@ lxc.start.auto = {"1" if autostart else "0"}
             s_code, _, s_err = run_cmd(["lxc-start", "-n", name, "-d"])
             if s_code != 0:
                 return {"success": True, "message": f"Контейнер '{name}' создан, но не смог запуститься: {s_err}", "warning": s_err}
+            trigger_singbox_dns_sync(wait_for_ip_seconds=2.5)
 
             # Asynchronously execute init-setup.sh if present
             if init_script:
@@ -1846,10 +1861,14 @@ def api_action(name):
     if action == "start":
         ensure_container_dns(name)
         code, out, err = run_cmd(["lxc-start", "-n", name, "-d"])
+        if code == 0:
+            trigger_singbox_dns_sync(wait_for_ip_seconds=2.5)
         return {"success": code == 0, "message": "Container started" if code == 0 else err}
 
     elif action == "stop":
         code, out, err = run_cmd(["lxc-stop", "-n", name, "-k"])
+        if code == 0:
+            trigger_singbox_dns_sync(wait_for_ip_seconds=0.5)
         return {"success": code == 0, "message": "Container stopped" if code == 0 else err}
 
     elif action == "restart":
@@ -1857,6 +1876,8 @@ def api_action(name):
         time.sleep(0.5)
         ensure_container_dns(name)
         code, out, err = run_cmd(["lxc-start", "-n", name, "-d"])
+        if code == 0:
+            trigger_singbox_dns_sync(wait_for_ip_seconds=2.5)
         return {"success": code == 0, "message": "Container restarted" if code == 0 else err}
 
     elif action == "freeze":
@@ -1881,6 +1902,8 @@ def api_action(name):
                         pass
             reload_caddy()
         code, out, err = run_cmd(["lxc-destroy", "-n", name, "-f"])
+        if code == 0:
+            trigger_singbox_dns_sync(wait_for_ip_seconds=0.5)
         return {"success": code == 0, "message": "Container destroyed" if code == 0 else err}
 
     elif action == "toggle_autostart":

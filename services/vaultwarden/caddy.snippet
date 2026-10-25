@@ -1,4 +1,15 @@
 vault.__BASE_DOMAIN__ {
-    import security_headers
-    reverse_proxy 127.0.0.1:8000
+    import common_optimizations
+    request_body {
+        max_size 50MB
+    }
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Real-IP {remote_host}
+        flush_interval -1
+        transport http {
+            keepalive 90s
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
 }
