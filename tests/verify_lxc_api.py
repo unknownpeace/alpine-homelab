@@ -10,6 +10,7 @@ Verifies:
   6. Web Terminal daemon (ttyd) and Caddy reverse proxy integration
 """
 
+import os
 import urllib.request
 import urllib.error
 import base64
@@ -117,42 +118,45 @@ dest_nat = api('http://127.0.0.1:8888/api/containers/test-nat/action', {'action'
 assert dest_nat.get('success') is True, f"Destroy test-nat failed: {dest_nat}"
 print("test-nat container cleanly destroyed.")
 
-print("\n=== 6. Creating Home LAN Bridged Container 'test-lan' (Router DHCP) ===")
-res_lan = api('http://127.0.0.1:8888/api/containers/create', {
-    'name': 'test-lan',
-    'distro': 'alpine',
-    'release': '3.24',
-    'net_mode': 'lan',
-    'autostart': False,
-    'start_now': True
-})
-print("Create LAN container response:", res_lan)
-assert res_lan.get('success') is True, f"Create LAN container failed: {res_lan}"
+if os.path.exists("/sys/class/net/br0"):
+    print("\n=== 6. Creating Home LAN Bridged Container 'test-lan' (Router DHCP) ===")
+    res_lan = api('http://127.0.0.1:8888/api/containers/create', {
+        'name': 'test-lan',
+        'distro': 'alpine',
+        'release': '3.24',
+        'net_mode': 'lan',
+        'autostart': False,
+        'start_now': True
+    })
+    print("Create LAN container response:", res_lan)
+    assert res_lan.get('success') is True, f"Create LAN container failed: {res_lan}"
 
-# Wait up to 10 seconds for DHCP lease from physical home router
-lan_ip = None
-for attempt in range(10):
-    time.sleep(1)
-    containers_res = api('http://127.0.0.1:8888/api/containers')
-    c_info = next((c for c in containers_res.get('containers', []) if c['name'] == 'test-lan'), None)
-    if c_info and c_info.get('ip') and c_info['ip'] != '-':
-        lan_ip = c_info['ip']
-        break
+    # Wait up to 10 seconds for DHCP lease from physical home router
+    lan_ip = None
+    for attempt in range(10):
+        time.sleep(1)
+        containers_res = api('http://127.0.0.1:8888/api/containers')
+        c_info = next((c for c in containers_res.get('containers', []) if c['name'] == 'test-lan'), None)
+        if c_info and c_info.get('ip') and c_info['ip'] != '-':
+            lan_ip = c_info['ip']
+            break
 
-print(f"Container 'test-lan' acquired IP: {lan_ip}")
-assert lan_ip is not None and "192.168.1." in lan_ip, f"Expected 192.168.1.x IP from router, got: {lan_ip}"
+    print(f"Container 'test-lan' acquired IP: {lan_ip}")
+    assert lan_ip is not None and "192.168.1." in lan_ip, f"Expected 192.168.1.x IP from router, got: {lan_ip}"
 
-# Verify outgoing internet from LAN container
-exec_lan = api('http://127.0.0.1:8888/api/containers/test-lan/exec', {
-    'command': 'ping -c 2 1.1.1.1'
-})
-print(f"LAN container ping exit code: {exec_lan.get('exit_code')}")
-assert exec_lan.get('exit_code') == 0, f"LAN container ping failed: {exec_lan}"
+    # Verify outgoing internet from LAN container
+    exec_lan = api('http://127.0.0.1:8888/api/containers/test-lan/exec', {
+        'command': 'ping -c 2 1.1.1.1'
+    })
+    print(f"LAN container ping exit code: {exec_lan.get('exit_code')}")
+    assert exec_lan.get('exit_code') == 0, f"LAN container ping failed: {exec_lan}"
 
-# Destroy test-lan
-dest_lan = api('http://127.0.0.1:8888/api/containers/test-lan/action', {'action': 'destroy'})
-assert dest_lan.get('success') is True, f"Destroy test-lan failed: {dest_lan}"
-print("test-lan container cleanly destroyed.")
+    # Destroy test-lan
+    dest_lan = api('http://127.0.0.1:8888/api/containers/test-lan/action', {'action': 'destroy'})
+    assert dest_lan.get('success') is True, f"Destroy test-lan failed: {dest_lan}"
+    print("test-lan container cleanly destroyed.")
+else:
+    print("\n=== 6. Skipping LAN Bridged Container (br0 bridge not configured on this host) ===")
 
 print("\n=== 7. Verifying ttyd Interactive Web Terminal Endpoint ===")
 # Check ttyd local port
