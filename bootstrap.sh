@@ -3,7 +3,9 @@ set -e
 
 # ==============================================================================
 # Alpine Homelab Appliance - One-Line Bootstrap Installer
-# Usage (Public repo):
+# Usage (Public repo - BusyBox wget out of the box on clean Alpine):
+#   wget -qO- https://raw.githubusercontent.com/unknownpeace/alpine-homelab/master/bootstrap.sh | sh
+# Usage (With curl):
 #   sh -c "$(curl -fsSL https://raw.githubusercontent.com/unknownpeace/alpine-homelab/master/bootstrap.sh)"
 # Usage (Private repo with Personal Access Token):
 #   GH_TOKEN="ghp_xxx" sh -c "$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3.raw" https://api.github.com/repos/unknownpeace/alpine-homelab/contents/bootstrap.sh)"

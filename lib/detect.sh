@@ -164,6 +164,10 @@ if { [ ! -f "$CONFIG_TARGET" ] || [ "${RECONFIG_MODE:-0}" = "1" ]; } && [ -t 0 ]
         IN_PROXY="${IN_PROXY:-3}"
     fi
     case "$IN_PROXY" in
+        vless://*|ss://*|trojan://*|hy2://*|hysteria2://*|vmess://*|http://*|https://*)
+            PROXY_INPUT="$IN_PROXY"
+            echo -e "   ${C_GREEN}[✓] Обнаружена прямая строка подключения или URL подписки.${C_RESET}"
+            ;;
         0)
             PROXY_INPUT="$PREV_PROXY_INPUT"
             ;;
@@ -306,57 +310,74 @@ if { [ ! -f "$CONFIG_TARGET" ] || [ "${RECONFIG_MODE:-0}" = "1" ]; } && [ -t 0 ]
             echo -e "  ${C_WHITE}10)${C_RESET} Tailscale VPN      (Удаленный доступ Mesh VPN без белого IP)"
             echo ""
             if [ -n "$curr_nums" ]; then
-                printf "   Введите номера через запятую (напр. 1,5,8) [Enter = сохранить текущие: %s]: " "$curr_nums"
+                printf "   Введите номера через запятую (напр. 1,5,8) или Enter для сохранения [%s]: " "$curr_nums"
                 read -r IN_CUSTOM
                 IN_CUSTOM="${IN_CUSTOM:-$curr_nums}"
             else
-                printf "   Введите номера через запятую (напр. 1,5,8) или Enter для пошаговых вопросов [y/N]: "
+                printf "   Введите номера через запятую (напр. 1,5,8) или нажмите Enter для пошагового выбора: "
                 read -r IN_CUSTOM
             fi
 
-            if [ -n "$IN_CUSTOM" ]; then
-                for num in $(echo "$IN_CUSTOM" | tr ',' ' '); do
-                    case "$num" in
-                        1) ENABLE_VAULTWARDEN="yes" ;;
-                        2) ENABLE_FORGEJO="yes" ;;
-                        3) ENABLE_CONDUIT="yes" ;;
-                        4) ENABLE_NAVIDROME="yes" ;;
-                        5) ENABLE_TRANSMISSION="yes" ;;
-                        6) ENABLE_YTDLP="yes" ;;
-                        7) ENABLE_SAMBA="yes" ;;
-                        8) ENABLE_LXC_MANAGER="yes" ;;
-                        9) ENABLE_ADGUARD_HOME="yes" ;;
-                        10) ENABLE_TAILSCALE="yes" ;;
-                    esac
-                done
-            else
-                ask_svc() {
-                    local prompt="$1"
-                    local prev_val="${2:-no}"
-                    local def_str="y/N"
-                    [ "$prev_val" = "yes" ] && def_str="Y/n"
-                    local ans
-                    printf "   %s [%s]: " "$prompt" "$def_str"
-                    read -r ans
-                    case "$ans" in
-                        [yY]|[yY][eE][sS]|1) echo "yes" ;;
-                        [nN]|[nN][oO]|0) echo "no" ;;
-                        "") echo "$prev_val" ;;
-                        *) echo "$prev_val" ;;
-                    esac
-                }
-                echo ""
-                ENABLE_VAULTWARDEN=$(ask_svc "1. Установить Vaultwarden (пароли Bitwarden)?" "$PREV_ENABLE_VAULTWARDEN")
-                ENABLE_FORGEJO=$(ask_svc "2. Установить Forgejo (Git-сервер)?" "$PREV_ENABLE_FORGEJO")
-                ENABLE_CONDUIT=$(ask_svc "3. Установить Conduit (Matrix мессенджер)?" "$PREV_ENABLE_CONDUIT")
-                ENABLE_NAVIDROME=$(ask_svc "4. Установить Navidrome (Музыка)?" "$PREV_ENABLE_NAVIDROME")
-                ENABLE_TRANSMISSION=$(ask_svc "5. Установить Transmission (Торренты)?" "$PREV_ENABLE_TRANSMISSION")
-                ENABLE_YTDLP=$(ask_svc "6. Установить Media Downloader (yt-dlp)?" "$PREV_ENABLE_YTDLP")
-                ENABLE_SAMBA=$(ask_svc "7. Установить Samba / WSDD (Сетевые папки)?" "$PREV_ENABLE_SAMBA")
-                ENABLE_LXC_MANAGER=$(ask_svc "8. Установить LXC Sandbox (Контейнеры)?" "$PREV_ENABLE_LXC_MANAGER")
-                ENABLE_ADGUARD_HOME=$(ask_svc "9. Установить AdGuard Home (Блокировка рекламы)?" "$PREV_ENABLE_ADGUARD_HOME")
-                ENABLE_TAILSCALE=$(ask_svc "10. Установить Tailscale Mesh VPN?" "$PREV_ENABLE_TAILSCALE")
-            fi
+            ask_svc() {
+                local prompt="$1"
+                local prev_val="${2:-no}"
+                local def_str="y/N"
+                [ "$prev_val" = "yes" ] && def_str="Y/n"
+                local ans
+                printf "   %s [%s]: " "$prompt" "$def_str"
+                read -r ans
+                case "$ans" in
+                    [yY]|[yY][eE][sS]|[дД]|[дД][аА]|1) echo "yes" ;;
+                    [nN]|[nN][oO]|[нН]|[нН][еЕ][тТ]|0) echo "no" ;;
+                    "") echo "$prev_val" ;;
+                    *) echo "$prev_val" ;;
+                esac
+            }
+
+            case "$IN_CUSTOM" in
+                ""|[yY]|[yY][eE][sS]|[дД]|[дД][аА])
+                    echo ""
+                    echo -e "   ${C_CYAN}Пошаговый выбор сервисов (Enter = значение по умолчанию):${C_RESET}"
+                    ENABLE_VAULTWARDEN=$(ask_svc "1. Установить Vaultwarden (пароли Bitwarden)?" "${PREV_ENABLE_VAULTWARDEN:-yes}")
+                    ENABLE_FORGEJO=$(ask_svc "2. Установить Forgejo (Git-сервер)?" "${PREV_ENABLE_FORGEJO:-yes}")
+                    ENABLE_CONDUIT=$(ask_svc "3. Установить Conduit (Matrix мессенджер)?" "${PREV_ENABLE_CONDUIT:-yes}")
+                    ENABLE_NAVIDROME=$(ask_svc "4. Установить Navidrome (Музыка)?" "${PREV_ENABLE_NAVIDROME:-yes}")
+                    ENABLE_TRANSMISSION=$(ask_svc "5. Установить Transmission (Торренты)?" "${PREV_ENABLE_TRANSMISSION:-yes}")
+                    ENABLE_YTDLP=$(ask_svc "6. Установить Media Downloader (yt-dlp)?" "${PREV_ENABLE_YTDLP:-yes}")
+                    ENABLE_SAMBA=$(ask_svc "7. Установить Samba / WSDD (Сетевые папки)?" "${PREV_ENABLE_SAMBA:-yes}")
+                    ENABLE_LXC_MANAGER=$(ask_svc "8. Установить LXC Sandbox (Контейнеры)?" "${PREV_ENABLE_LXC_MANAGER:-yes}")
+                    ENABLE_ADGUARD_HOME=$(ask_svc "9. Установить AdGuard Home (Блокировка рекламы)?" "${PREV_ENABLE_ADGUARD_HOME:-no}")
+                    ENABLE_TAILSCALE=$(ask_svc "10. Установить Tailscale Mesh VPN?" "${PREV_ENABLE_TAILSCALE:-no}")
+                    ;;
+                all|ALL|all*|все|Все|ВСЕ)
+                    ENABLE_VAULTWARDEN="yes"
+                    ENABLE_FORGEJO="yes"
+                    ENABLE_CONDUIT="yes"
+                    ENABLE_NAVIDROME="yes"
+                    ENABLE_TRANSMISSION="yes"
+                    ENABLE_YTDLP="yes"
+                    ENABLE_SAMBA="yes"
+                    ENABLE_LXC_MANAGER="yes"
+                    ENABLE_ADGUARD_HOME="no"
+                    ENABLE_TAILSCALE="no"
+                    ;;
+                *)
+                    for num in $(echo "$IN_CUSTOM" | tr ',' ' '); do
+                        case "$num" in
+                            1) ENABLE_VAULTWARDEN="yes" ;;
+                            2) ENABLE_FORGEJO="yes" ;;
+                            3) ENABLE_CONDUIT="yes" ;;
+                            4) ENABLE_NAVIDROME="yes" ;;
+                            5) ENABLE_TRANSMISSION="yes" ;;
+                            6) ENABLE_YTDLP="yes" ;;
+                            7) ENABLE_SAMBA="yes" ;;
+                            8) ENABLE_LXC_MANAGER="yes" ;;
+                            9) ENABLE_ADGUARD_HOME="yes" ;;
+                            10) ENABLE_TAILSCALE="yes" ;;
+                        esac
+                    done
+                    ;;
+            esac
             ;;
         *)
             ENABLE_CADDY="yes"

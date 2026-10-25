@@ -45,7 +45,11 @@
 apk add --no-cache git curl && git clone https://github.com/unknownpeace/alpine-homelab.git /opt/homelab && cd /opt/homelab && ./homelab.sh install
 ```
 
-### Вариант 2: One-Liner Bootstrap
+### Вариант 2: One-Liner Bootstrap (Работает на чистой Alpine Linux с wget или curl)
+```bash
+wget -qO- https://raw.githubusercontent.com/unknownpeace/alpine-homelab/master/bootstrap.sh | sh
+```
+*Или, если установлен curl:*
 ```bash
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/unknownpeace/alpine-homelab/master/bootstrap.sh)"
 ```
