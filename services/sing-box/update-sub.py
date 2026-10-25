@@ -123,6 +123,7 @@ def parse_single_node(link: str) -> dict:
             if "path" in params: xhttp_cfg["path"] = params["path"]
             if "host" in params: xhttp_cfg["host"] = params["host"]
             if "mode" in params: xhttp_cfg["mode"] = params["mode"]
+            xhttp_cfg["x_padding_bytes"] = params.get("x_padding_bytes", params.get("padding", "100-1000"))
             ob["transport"] = xhttp_cfg
         elif t_type == "http":
             http_cfg = {"type": "http"}
