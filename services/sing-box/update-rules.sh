@@ -2,6 +2,8 @@
 set -e
 # sing-box: Download high-performance GeoIP and GeoSite binary rule-sets (.srs)
 
+[ -f /opt/homelab/config.env ] && . /opt/homelab/config.env
+
 RULE_BASE="https://testingcf.jsdelivr.net/gh/runetfreedom/russia-v2ray-rules-dat@release/sing-box"
 RULE_BACKUP="https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box"
 mkdir -p /var/lib/sing-box/rules
@@ -27,15 +29,20 @@ if ! curl -fL --retry 3 --connect-timeout 6 "$AI_RULE_BASE" -o /var/lib/sing-box
     curl -fL --retry 3 --connect-timeout 6 "$AI_RULE_BACKUP" -o /var/lib/sing-box/rules/geosite-category-ai.srs 2>/dev/null || true
 fi
 
-echo "Downloading and compiling AdGuard DNS Filter to .srs..."
-ADGUARD_FILTER_URL="https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt"
-ADGUARD_FILTER_BACKUP="https://raw.githubusercontent.com/AdguardTeam/AdguardSDNSFilter/gh-pages/Filters/filter.txt"
-if ! curl -fL --retry 3 --connect-timeout 8 "$ADGUARD_FILTER_URL" -o /tmp/adguard_filter.txt 2>/dev/null; then
-    curl -fL --retry 3 --connect-timeout 8 "$ADGUARD_FILTER_BACKUP" -o /tmp/adguard_filter.txt 2>/dev/null || true
-fi
-if [ -f /tmp/adguard_filter.txt ]; then
-    sing-box rule-set convert /tmp/adguard_filter.txt -t adguard -o /var/lib/sing-box/rules/adguard-dns.srs
-    rm -f /tmp/adguard_filter.txt
+if [ "${ENABLE_ADGUARD_HOME:-no}" != "yes" ]; then
+    echo "Downloading and compiling AdGuard DNS Filter to .srs..."
+    ADGUARD_FILTER_URL="https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt"
+    ADGUARD_FILTER_BACKUP="https://raw.githubusercontent.com/AdguardTeam/AdguardSDNSFilter/gh-pages/Filters/filter.txt"
+    if ! curl -fL --retry 3 --connect-timeout 8 "$ADGUARD_FILTER_URL" -o /tmp/adguard_filter.txt 2>/dev/null; then
+        curl -fL --retry 3 --connect-timeout 8 "$ADGUARD_FILTER_BACKUP" -o /tmp/adguard_filter.txt 2>/dev/null || true
+    fi
+    if [ -f /tmp/adguard_filter.txt ]; then
+        sing-box rule-set convert /tmp/adguard_filter.txt -t adguard -o /var/lib/sing-box/rules/adguard-dns.srs
+        rm -f /tmp/adguard_filter.txt
+    fi
+else
+    echo "AdGuard Home enabled: skipping sing-box adguard-dns.srs (handled by AdGuard Home)."
+    rm -f /var/lib/sing-box/rules/adguard-dns.srs
 fi
 
 echo "Rule-sets successfully updated."

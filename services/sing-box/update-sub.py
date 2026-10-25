@@ -62,19 +62,22 @@ for rfile, main_url in rules_map.items():
             except Exception:
                 pass
 
+ADGUARD_ENABLED = os.environ.get("ENABLE_ADGUARD_HOME", "no").lower() == "yes"
+
 adguard_srs = os.path.join(RULE_DIR, "adguard-dns.srs")
-if not os.path.exists(adguard_srs) or os.path.getsize(adguard_srs) == 0:
-    flist = "/tmp/adguard_filter.txt"
-    for url in ["https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt", "https://raw.githubusercontent.com/AdguardTeam/AdguardSDNSFilter/gh-pages/Filters/filter.txt"]:
-        try:
-            urllib.request.urlretrieve(url, flist)
-            if os.path.exists(flist) and os.path.getsize(flist) > 0:
-                subprocess.run(["sing-box", "rule-set", "convert", flist, "-t", "adguard", "-o", adguard_srs], check=False)
-                if os.path.exists(flist): os.remove(flist)
-                if os.path.exists(adguard_srs) and os.path.getsize(adguard_srs) > 0:
-                    break
-        except Exception:
-            pass
+if not ADGUARD_ENABLED:
+    if not os.path.exists(adguard_srs) or os.path.getsize(adguard_srs) == 0:
+        flist = "/tmp/adguard_filter.txt"
+        for url in ["https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt", "https://raw.githubusercontent.com/AdguardTeam/AdguardSDNSFilter/gh-pages/Filters/filter.txt"]:
+            try:
+                urllib.request.urlretrieve(url, flist)
+                if os.path.exists(flist) and os.path.getsize(flist) > 0:
+                    subprocess.run(["sing-box", "rule-set", "convert", flist, "-t", "adguard", "-o", adguard_srs], check=False)
+                    if os.path.exists(flist): os.remove(flist)
+                    if os.path.exists(adguard_srs) and os.path.getsize(adguard_srs) > 0:
+                        break
+            except Exception:
+                pass
 
 # Determine target URL or node string
 if len(sys.argv) > 1 and sys.argv[1].strip():
@@ -338,10 +341,14 @@ IP_HOST = get_default_ip()
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "lan").lstrip(".")
 DNS_PRIMARY = os.environ.get("DNS_UPSTREAM_PRIMARY", "https://dns.adguard-dns.com/dns-query")
 DNS_SECONDARY = os.environ.get("DNS_UPSTREAM_SECONDARY", "1.1.1.1")
-if os.environ.get("ENABLE_ADGUARD_HOME", "no") == "yes":
+if ADGUARD_ENABLED:
+    dns_in_listen = "127.0.0.1"
     dns_in_port = int(os.environ.get("SINGBOX_DNS_PORT", "5353"))
+    tun_dns_mode = "disabled"
 else:
+    dns_in_listen = "0.0.0.0"
     dns_in_port = int(os.environ.get("SINGBOX_DNS_PORT", "53"))
+    tun_dns_mode = "hijack"
 
 predefined_hosts = {
     f"vault.{BASE_DOMAIN}": IP_HOST,
@@ -356,6 +363,15 @@ predefined_hosts = {
     f"homelab.{BASE_DOMAIN}": IP_HOST
 }
 
+dns_rules = [{"domain_suffix": [f".{BASE_DOMAIN}"], "server": "hosts-lan"}]
+if not ADGUARD_ENABLED:
+    dns_rules.append({"rule_set": "adguard-dns", "action": "reject"})
+dns_rules.extend([
+    {"rule_set": "geosite-category-ai", "server": "ai-dns"},
+    {"rule_set": "geosite-ru-blocked", "server": "remote-dns"},
+    {"rule_set": ["geosite-tld-ru", "geosite-category-ru"], "server": "direct-dns"}
+])
+
 config = {
     "log": {"level": "info"},
     "dns": {
@@ -369,13 +385,7 @@ config = {
             {"tag": "remote-dns", "type": "tls", "server": DNS_SECONDARY, "detour": main_selector},
             {"tag": "direct-dns", "type": "udp", "server": "77.88.8.8", "detour": "direct"}
         ],
-        "rules": [
-            {"domain_suffix": [f".{BASE_DOMAIN}"], "server": "hosts-lan"},
-            {"rule_set": "adguard-dns", "action": "reject"},
-            {"rule_set": "geosite-category-ai", "server": "ai-dns"},
-            {"rule_set": "geosite-ru-blocked", "server": "remote-dns"},
-            {"rule_set": ["geosite-tld-ru", "geosite-category-ru"], "server": "direct-dns"}
-        ],
+        "rules": dns_rules,
         "final": "remote-dns",
         "strategy": "prefer_ipv4"
     },
@@ -386,67 +396,69 @@ config = {
             "interface_name": "tun0",
             "address": ["172.19.0.1/30"],
             "auto_route": True,
-            "strict_route": False
+            "strict_route": False,
+            "dns_mode": tun_dns_mode
         },
         {
             "type": "direct",
             "tag": "dns-in",
-            "listen": "0.0.0.0",
+            "listen": dns_in_listen,
             "listen_port": dns_in_port
         }
     ],
     "outbounds": final_outbounds,
     "route": {
         "default_domain_resolver": "direct-dns",
-        "rule_set": [
-            {
-                "tag": "adguard-dns",
-                "type": "local",
-                "format": "binary",
-                "path": "/var/lib/sing-box/rules/adguard-dns.srs"
-            },
-            {
-                "tag": "geosite-category-ai",
-                "type": "local",
-                "format": "binary",
-                "path": "/var/lib/sing-box/rules/geosite-category-ai.srs"
-            },
-            {
-                "tag": "geosite-ru-blocked",
-                "type": "local",
-                "format": "binary",
-                "path": "/var/lib/sing-box/rules/geosite-ru-blocked.srs"
-            },
-            {
-                "tag": "geosite-tld-ru",
-                "type": "local",
-                "format": "binary",
-                "path": "/var/lib/sing-box/rules/geosite-tld-ru.srs"
-            },
-            {
-                "tag": "geosite-category-ru",
-                "type": "local",
-                "format": "binary",
-                "path": "/var/lib/sing-box/rules/geosite-category-ru.srs"
-            },
-            {
-                "tag": "geoip-ru",
-                "type": "local",
-                "format": "binary",
-                "path": "/var/lib/sing-box/rules/geoip-ru.srs"
-            }
-        ],
-        "rules": [
-            {"action": "sniff"},
-            {"inbound": "dns-in", "action": "hijack-dns"},
-            {"protocol": "bittorrent", "outbound": "Torrent"},
-            {"ip_is_private": True, "outbound": "direct"},
-            {"rule_set": "adguard-dns", "action": "reject", "method": "drop"},
-            {"rule_set": "geosite-category-ai", "outbound": "🤖 Нейросети"},
-            {"rule_set": "geosite-ru-blocked", "outbound": main_selector},
-            {"rule_set": ["geosite-tld-ru", "geosite-category-ru"], "outbound": "direct"},
-            {"rule_set": "geoip-ru", "outbound": "direct"}
-        ],
+        "rule_set": (
+            ([{"tag": "adguard-dns", "type": "local", "format": "binary", "path": "/var/lib/sing-box/rules/adguard-dns.srs"}] if not ADGUARD_ENABLED else []) +
+            [
+                {
+                    "tag": "geosite-category-ai",
+                    "type": "local",
+                    "format": "binary",
+                    "path": "/var/lib/sing-box/rules/geosite-category-ai.srs"
+                },
+                {
+                    "tag": "geosite-ru-blocked",
+                    "type": "local",
+                    "format": "binary",
+                    "path": "/var/lib/sing-box/rules/geosite-ru-blocked.srs"
+                },
+                {
+                    "tag": "geosite-tld-ru",
+                    "type": "local",
+                    "format": "binary",
+                    "path": "/var/lib/sing-box/rules/geosite-tld-ru.srs"
+                },
+                {
+                    "tag": "geosite-category-ru",
+                    "type": "local",
+                    "format": "binary",
+                    "path": "/var/lib/sing-box/rules/geosite-category-ru.srs"
+                },
+                {
+                    "tag": "geoip-ru",
+                    "type": "local",
+                    "format": "binary",
+                    "path": "/var/lib/sing-box/rules/geoip-ru.srs"
+                }
+            ]
+        ),
+        "rules": (
+            [
+                {"action": "sniff"},
+                {"inbound": "dns-in", "action": "hijack-dns"},
+                {"protocol": "bittorrent", "outbound": "Torrent"},
+                {"ip_is_private": True, "outbound": "direct"}
+            ] +
+            ([{"rule_set": "adguard-dns", "action": "reject", "method": "drop"}] if not ADGUARD_ENABLED else []) +
+            [
+                {"rule_set": "geosite-category-ai", "outbound": "🤖 Нейросети"},
+                {"rule_set": "geosite-ru-blocked", "outbound": main_selector},
+                {"rule_set": ["geosite-tld-ru", "geosite-category-ru"], "outbound": "direct"},
+                {"rule_set": "geoip-ru", "outbound": "direct"}
+            ]
+        ),
         "final": main_selector,
         "auto_detect_interface": True
     },
