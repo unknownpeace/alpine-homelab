@@ -448,6 +448,17 @@ def get_host_metrics():
         next_octet += 1
     suggested_ip = f"10.0.3.{next_octet}"
 
+    host_gateway = "192.168.1.1"
+    try:
+        code, out, _ = run_cmd(["ip", "route", "show", "default"])
+        if code == 0 and "via" in out:
+            parts = out.strip().split()
+            idx = parts.index("via")
+            if idx + 1 < len(parts):
+                host_gateway = parts[idx + 1]
+    except Exception:
+        pass
+
     return {
         "load": [round(x, 2) for x in load],
         "ram": {
@@ -464,6 +475,7 @@ def get_host_metrics():
         },
         "counts": counts,
         "suggested_ip": suggested_ip,
+        "host_gateway": host_gateway,
         "base_domain": get_base_domain()
     }
 
@@ -663,6 +675,9 @@ def api_create():
     release = data.get("release", "3.24").strip()
     net_mode = data.get("net_mode", "lan").strip().lower()
     ip = data.get("ip", "").strip()
+    lan_ip = data.get("lan_ip", "").strip()
+    lan_gateway = data.get("lan_gateway", "").strip()
+    nesting = bool(data.get("nesting", False))
     autostart = bool(data.get("autostart", False))
     start_now = bool(data.get("start_now", True))
 
@@ -693,7 +708,17 @@ def api_create():
                 return {"success": False, "error": "Ошибка распаковки rootfs: " + err}
 
             if net_mode == "lan":
-                net_cfg = """lxc.net.0.type = veth
+                if lan_ip:
+                    clean_lan_ip = lan_ip.split("/")[0].strip()
+                    gw = lan_gateway.strip() or "192.168.1.1"
+                    net_cfg = f"""lxc.net.0.type = veth
+lxc.net.0.flags = up
+lxc.net.0.link = br0
+lxc.net.0.name = eth0
+lxc.net.0.ipv4.address = {clean_lan_ip}/24
+lxc.net.0.ipv4.gateway = {gw}"""
+                else:
+                    net_cfg = """lxc.net.0.type = veth
 lxc.net.0.flags = up
 lxc.net.0.link = br0
 lxc.net.0.name = eth0"""
@@ -715,12 +740,17 @@ lxc.net.0.ipv4.gateway = 10.0.3.1"""
                 quota = cpu_quota * 1000
                 cgroup_cfg += f"lxc.cgroup2.cpu.max = {quota} 100000\n"
 
+            nesting_cfg = ""
+            if nesting:
+                nesting_cfg = "# Nesting support (Docker / Podman inside LXC)\nlxc.include = /usr/share/lxc/config/nesting.conf\n"
+            mount_auto = "proc:mixed sys:rw cgroup:mixed" if nesting else "proc:mixed sys:ro cgroup:mixed"
+
             config_content = f"""lxc.uts.name = {name}
 lxc.rootfs.path = dir:{rootfs_dir}
 {net_cfg}
-{cgroup_cfg}lxc.tty.max = 4
+{cgroup_cfg}{nesting_cfg}lxc.tty.max = 4
 lxc.pty.max = 1024
-lxc.mount.auto = proc:mixed sys:ro cgroup:mixed
+lxc.mount.auto = {mount_auto}
 lxc.start.auto = {"1" if autostart else "0"}
 """
             with open(os.path.join(target_dir, "config"), "w", encoding="utf-8") as f:
@@ -732,12 +762,20 @@ lxc.start.auto = {"1" if autostart else "0"}
             if net_mode == "lan":
                 net_if_dir = os.path.join(etc_dir, "network")
                 os.makedirs(net_if_dir, exist_ok=True)
-                with open(os.path.join(net_if_dir, "interfaces"), "w", encoding="utf-8") as f:
-                    f.write("auto lo\niface lo inet loopback\n\nauto eth0\niface eth0 inet dhcp\n")
-                inittab_path = os.path.join(etc_dir, "inittab")
-                if os.path.exists(inittab_path):
-                    with open(inittab_path, "a", encoding="utf-8") as f:
-                        f.write("\n::sysinit:/sbin/udhcpc -b -i eth0\n")
+                if lan_ip:
+                    clean_lan_ip = lan_ip.split("/")[0].strip()
+                    gw = lan_gateway.strip() or "192.168.1.1"
+                    with open(os.path.join(net_if_dir, "interfaces"), "w", encoding="utf-8") as f:
+                        f.write(f"auto lo\niface lo inet loopback\n\nauto eth0\niface eth0 inet static\n    address {clean_lan_ip}\n    netmask 255.255.255.0\n    gateway {gw}\n")
+                    with open(os.path.join(etc_dir, "resolv.conf"), "w", encoding="utf-8") as f:
+                        f.write(f"nameserver {gw}\nnameserver 1.1.1.1\n")
+                else:
+                    with open(os.path.join(net_if_dir, "interfaces"), "w", encoding="utf-8") as f:
+                        f.write("auto lo\niface lo inet loopback\n\nauto eth0\niface eth0 inet dhcp\n")
+                    inittab_path = os.path.join(etc_dir, "inittab")
+                    if os.path.exists(inittab_path):
+                        with open(inittab_path, "a", encoding="utf-8") as f:
+                            f.write("\n::sysinit:/sbin/udhcpc -b -i eth0\n")
             else:
                 ensure_container_dns(clean_name, net_mode)
 
@@ -763,14 +801,27 @@ lxc.start.auto = {"1" if autostart else "0"}
                 new_lines = []
                 for line in lines:
                     if not line.strip().startswith("lxc.net.") and not line.strip().startswith("lxc.start.auto") and not line.strip().startswith("lxc.cgroup2."):
+                        if nesting and "nesting.conf" in line:
+                            continue
                         new_lines.append(line)
 
                 if net_mode == "lan":
-                    new_lines.append("\n# Network Mode: Home LAN (br0 - DHCP from router)\n")
-                    new_lines.append("lxc.net.0.type = veth\n")
-                    new_lines.append("lxc.net.0.flags = up\n")
-                    new_lines.append("lxc.net.0.link = br0\n")
-                    new_lines.append("lxc.net.0.name = eth0\n")
+                    if lan_ip:
+                        clean_lan_ip = lan_ip.split("/")[0].strip()
+                        gw = lan_gateway.strip() or "192.168.1.1"
+                        new_lines.append("\n# Network Mode: Home LAN (br0 - Static IP)\n")
+                        new_lines.append("lxc.net.0.type = veth\n")
+                        new_lines.append("lxc.net.0.flags = up\n")
+                        new_lines.append("lxc.net.0.link = br0\n")
+                        new_lines.append("lxc.net.0.name = eth0\n")
+                        new_lines.append(f"lxc.net.0.ipv4.address = {clean_lan_ip}/24\n")
+                        new_lines.append(f"lxc.net.0.ipv4.gateway = {gw}\n")
+                    else:
+                        new_lines.append("\n# Network Mode: Home LAN (br0 - DHCP from router)\n")
+                        new_lines.append("lxc.net.0.type = veth\n")
+                        new_lines.append("lxc.net.0.flags = up\n")
+                        new_lines.append("lxc.net.0.link = br0\n")
+                        new_lines.append("lxc.net.0.name = eth0\n")
                 else:
                     if not re.match(r"^10\.0\.3\.\d{1,3}$", ip):
                         ip = "10.0.3.10"
@@ -788,12 +839,31 @@ lxc.start.auto = {"1" if autostart else "0"}
                     quota = cpu_quota * 1000
                     new_lines.append(f"lxc.cgroup2.cpu.max = {quota} 100000\n")
 
+                if nesting:
+                    new_lines.append("\n# Nesting support (Docker / Podman inside LXC)\n")
+                    new_lines.append("lxc.include = /usr/share/lxc/config/nesting.conf\n")
+                    new_lines.append("lxc.mount.auto = proc:mixed sys:rw cgroup:mixed\n")
+
                 new_lines.append(f"lxc.start.auto = {'1' if autostart else '0'}\n")
                 with open(cfg_path, "w", encoding="utf-8") as f:
                     f.writelines(new_lines)
 
             # Ensure container DNS configuration
-            ensure_container_dns(clean_name, net_mode)
+            if net_mode == "lan" and lan_ip:
+                clean_lan_ip = lan_ip.split("/")[0].strip()
+                gw = lan_gateway.strip() or "192.168.1.1"
+                etc_dir = os.path.join(rootfs_dir, "etc")
+                os.makedirs(etc_dir, exist_ok=True)
+                resolv_path = os.path.join(etc_dir, "resolv.conf")
+                if os.path.islink(resolv_path) or os.path.exists(resolv_path):
+                    try:
+                        os.unlink(resolv_path)
+                    except Exception:
+                        pass
+                with open(resolv_path, "w", encoding="utf-8") as f:
+                    f.write(f"nameserver {gw}\nnameserver 1.1.1.1\n")
+            elif net_mode == "nat":
+                ensure_container_dns(clean_name, net_mode)
 
         # Pre-seed: Inject SSH Public Key
         if ssh_key and os.path.exists(rootfs_dir):
@@ -846,6 +916,7 @@ def api_get_limits(name):
     cfg_file = os.path.join(target_dir, "config")
     mem_mb = 0
     cpu_quota = 0
+    nesting_enabled = False
 
     if os.path.exists(cfg_file):
         with open(cfg_file, "r", encoding="utf-8") as f:
@@ -856,6 +927,8 @@ def api_get_limits(name):
             m_cpu = re.search(r"^\s*lxc\.cgroup2\.cpu\.max\s*=\s*(\d+)", content, re.M)
             if m_cpu:
                 cpu_quota = int(m_cpu.group(1)) // 1000
+            if re.search(r"^\s*lxc\.include\s*=\s*/usr/share/lxc/config/nesting\.conf", content, re.M):
+                nesting_enabled = True
 
     # Live cgroup status
     cg_path = f"/sys/fs/cgroup/lxc.payload.{name}"
@@ -874,7 +947,8 @@ def api_get_limits(name):
         "name": name,
         "memory_mb": mem_mb,
         "cpu_quota": cpu_quota,
-        "current_mem_mb": current_mem_mb
+        "current_mem_mb": current_mem_mb,
+        "nesting": nesting_enabled
     }
 
 @app.route("/api/containers/<name>/limits", method="POST")
@@ -891,6 +965,8 @@ def api_set_limits(name):
     except ValueError:
         return {"success": False, "error": "Invalid limit values."}
 
+    nesting_req = data.get("nesting")
+
     cfg_file = os.path.join(target_dir, "config")
     if os.path.exists(cfg_file):
         with open(cfg_file, "r", encoding="utf-8") as f:
@@ -898,6 +974,8 @@ def api_set_limits(name):
         new_lines = []
         for line in lines:
             if not line.strip().startswith("lxc.cgroup2.memory.max") and not line.strip().startswith("lxc.cgroup2.cpu.max"):
+                if nesting_req is not None and "nesting.conf" in line:
+                    continue
                 new_lines.append(line)
 
         if mem_mb > 0:
@@ -905,6 +983,11 @@ def api_set_limits(name):
         if cpu_quota > 0:
             quota = cpu_quota * 1000
             new_lines.append(f"lxc.cgroup2.cpu.max = {quota} 100000\n")
+
+        if nesting_req is not None and bool(nesting_req):
+            new_lines.append("\n# Nesting support (Docker / Podman inside LXC)\n")
+            new_lines.append("lxc.include = /usr/share/lxc/config/nesting.conf\n")
+            new_lines.append("lxc.mount.auto = proc:mixed sys:rw cgroup:mixed\n")
 
         with open(cfg_file, "w", encoding="utf-8") as f:
             f.writelines(new_lines)
@@ -1768,6 +1851,23 @@ INDEX_HTML = """<!DOCTYPE html>
                     </label>
                 </div>
 
+                <div id="lan-ip-container" class="space-y-2 p-2.5 bg-slate-950/60 rounded-xl border border-slate-800">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="new-lan-static-enable" onchange="toggleLanStaticUI()" class="rounded bg-slate-900 border-slate-700 text-brand-600 focus:ring-0">
+                        <span class="text-xs text-slate-300">Указать статический IP вручную (вместо DHCP)</span>
+                    </label>
+                    <div id="lan-static-fields" class="hidden grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-1">Статический IPv4 на LAN</label>
+                            <input type="text" id="new-lan-ip" placeholder="например: 192.168.1.150" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-1">Шлюз сети (Gateway)</label>
+                            <input type="text" id="new-lan-gw" placeholder="192.168.1.5" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                        </div>
+                    </div>
+                </div>
+
                 <div id="nat-ip-container" class="hidden">
                     <label class="block text-xs font-medium text-slate-300 mb-1">Статический IPv4 для NAT (lxcbr0)</label>
                     <input type="text" id="new-ip" placeholder="10.0.3.10" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
@@ -1799,6 +1899,13 @@ INDEX_HTML = """<!DOCTYPE html>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="new-startnow" checked class="rounded bg-slate-950 border-slate-700 text-brand-600 focus:ring-0">
                         <span class="text-xs text-slate-300">Запустить контейнер сразу после создания</span>
+                    </label>
+                    <label class="flex items-start gap-2 cursor-pointer pt-1">
+                        <input type="checkbox" id="new-nesting" class="mt-0.5 rounded bg-slate-950 border-slate-700 text-brand-600 focus:ring-0">
+                        <div>
+                            <span class="text-xs text-slate-200 font-medium">Включить Nesting (Docker / Podman внутри LXC)</span>
+                            <p class="text-[10px] text-slate-400">Подключает nesting.conf для работы подконтейнеров, cgroups v2 и монтирования proc/sys.</p>
+                        </div>
                     </label>
                 </div>
 
@@ -1847,6 +1954,14 @@ INDEX_HTML = """<!DOCTYPE html>
                         <span class="text-slate-400 font-mono">%</span>
                     </div>
                     <p class="text-[11px] text-slate-500 mt-1">100 = 1 ядро, 50 = половина ядра, 0 = без ограничений.</p>
+                </div>
+
+                <div class="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-1">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="limits-nesting-input" class="rounded bg-slate-900 border-slate-700 text-brand-600 focus:ring-0">
+                        <span class="text-xs font-medium text-slate-200">Включить Nesting (Docker / Podman внутри LXC)</span>
+                    </label>
+                    <p class="text-[10px] text-slate-400 pl-6">Разрешает запуск контейнеров внутри этого LXC (монтирование cgroups, procfs, sysfs). Требует перезапуска контейнера.</p>
                 </div>
 
                 <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
@@ -2463,11 +2578,23 @@ INDEX_HTML = """<!DOCTYPE html>
 
         function toggleNetModeUI() {
             const mode = document.querySelector('input[name="net_mode"]:checked').value;
-            const ipContainer = document.getElementById('nat-ip-container');
+            const natContainer = document.getElementById('nat-ip-container');
+            const lanContainer = document.getElementById('lan-ip-container');
             if (mode === 'nat') {
-                ipContainer.classList.remove('hidden');
+                natContainer.classList.remove('hidden');
+                if (lanContainer) lanContainer.classList.add('hidden');
             } else {
-                ipContainer.classList.add('hidden');
+                natContainer.classList.add('hidden');
+                if (lanContainer) lanContainer.classList.remove('hidden');
+            }
+        }
+
+        function toggleLanStaticUI() {
+            const isStatic = document.getElementById('new-lan-static-enable')?.checked;
+            const fields = document.getElementById('lan-static-fields');
+            if (fields) {
+                if (isStatic) fields.classList.remove('hidden');
+                else fields.classList.add('hidden');
             }
         }
 
@@ -2479,6 +2606,11 @@ INDEX_HTML = """<!DOCTYPE html>
                 hostBaseDomain = d.base_domain || 'uwu';
                 const suffix = document.getElementById('route-domain-suffix');
                 if (suffix) suffix.innerText = `.${hostBaseDomain}`;
+
+                if (d.host_gateway) {
+                    const lanGwInput = document.getElementById('new-lan-gw');
+                    if (lanGwInput) lanGwInput.placeholder = d.host_gateway;
+                }
 
                 document.getElementById('stat-load').innerText = d.load.join(', ');
                 document.getElementById('stat-ram-text').innerText = `${d.ram.used_mb} / ${d.ram.total_mb} MB`;
@@ -2721,6 +2853,10 @@ INDEX_HTML = """<!DOCTYPE html>
             const distro = document.getElementById('new-distro').value;
             const release = document.getElementById('new-release').value;
             const netMode = document.querySelector('input[name="net_mode"]:checked').value;
+            const isLanStatic = document.getElementById('new-lan-static-enable')?.checked;
+            const lanIp = isLanStatic ? (document.getElementById('new-lan-ip')?.value.trim() || '') : '';
+            const lanGw = isLanStatic ? (document.getElementById('new-lan-gw')?.value.trim() || '') : '';
+            const nesting = document.getElementById('new-nesting')?.checked || false;
 
             const payload = {
                 name: cleanName,
@@ -2728,6 +2864,9 @@ INDEX_HTML = """<!DOCTYPE html>
                 release: release,
                 net_mode: netMode,
                 ip: document.getElementById('new-ip').value.trim(),
+                lan_ip: lanIp,
+                lan_gateway: lanGw,
+                nesting: nesting,
                 autostart: document.getElementById('new-autostart').checked,
                 start_now: document.getElementById('new-startnow').checked,
                 memory_mb: parseInt(document.getElementById('new-mem-mb').value || '0', 10),
@@ -2781,6 +2920,8 @@ INDEX_HTML = """<!DOCTYPE html>
                 if (d.success) {
                     document.getElementById('limits-mem-input').value = d.memory_mb || '';
                     document.getElementById('limits-cpu-input').value = d.cpu_quota || '';
+                    const nestingInput = document.getElementById('limits-nesting-input');
+                    if (nestingInput) nestingInput.checked = !!d.nesting;
                 }
             } catch (e) {}
         }
@@ -2793,12 +2934,13 @@ INDEX_HTML = """<!DOCTYPE html>
             e.preventDefault();
             const mem = parseInt(document.getElementById('limits-mem-input').value || '0', 10);
             const cpu = parseInt(document.getElementById('limits-cpu-input').value || '0', 10);
+            const nesting = document.getElementById('limits-nesting-input')?.checked || false;
 
             try {
                 const res = await fetch(`/api/containers/${activeLimitsTarget}/limits`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ memory_mb: mem, cpu_quota: cpu })
+                    body: JSON.stringify({ memory_mb: mem, cpu_quota: cpu, nesting: nesting })
                 });
                 const d = await res.json();
                 if (d.success) {
