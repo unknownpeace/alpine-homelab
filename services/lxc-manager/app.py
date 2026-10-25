@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-LXC Sandbox Web Manager for Alpine Linux
+LXC Sandbox Web Manager 2.0 for Alpine Linux
 Ultra-lightweight native WSGI application built with Bottle.
-Manages isolated test/sandbox containers alongside bare-metal services.
-Features:
-  - Live synchronization with official LinuxContainers catalog (images.linuxcontainers.org)
-  - Full support for Kali Linux, Debian, Ubuntu, Alpine, Arch, Fedora, Rocky, AlmaLinux, etc.
-  - Fully responsive mobile & desktop UI (touch cards on mobile, expansive table on desktop)
-  - Home network LAN mode (br0 with DHCP from router) & NAT Sandbox (lxcbr0)
+Enterprise-grade container orchestration matching LXD/Incus & Proxmox VE standards:
+  - Live synchronization with official LinuxContainers catalog (23+ distros including Kali)
+  - Full mobile & desktop responsive UI (Container Cards on mobile, rich table on desktop)
+  - cgroups v2 dynamic resource limits (RAM & CPU limits applied on-the-fly)
+  - 1-Click Caddy Ingress (auto reverse-proxy publishing with HTTPS and PKI SSL)
+  - Inline Rootfs File Explorer & Web Code Editor with syntax styling
+  - 1-Click Container Cloning (lxc-copy) and Golden Image templating
+  - Container Backup & Restore (tar.gz export & import)
+  - Pre-seed Cloud-Init (SSH public key injection & post-install scripts)
+  - Live SVG Telemetry Graphs (CPU %, RAM MB, Net RX/TX)
+  - Interactive Web Shell (ttyd / xterm.js) with Fullscreen Mode
   - Snapshots and Rollback (lxc-snapshot)
-  - Interactive Web Terminal (ttyd / xterm.js via WebSocket) with Fullscreen Mode
-  - Quick command execution via lxc-attach
 """
 
 import os
@@ -31,6 +34,7 @@ LXC_DIR = "/var/lib/lxc"
 CACHE_DIR = "/var/cache/lxc"
 MINIROOTFS_CACHE = os.path.join(LXC_DIR, "cache", "alpine-minirootfs.tar.gz")
 CATALOG_CACHE_FILE = os.path.join(LXC_DIR, "cache", "upstream-catalog.json")
+CADDY_CONF_DIR = "/etc/caddy/conf.d"
 
 UPSTREAM_INDEX_URL = "https://images.linuxcontainers.org/meta/1.0/index-system"
 FALLBACK_INDEX_URL = "https://uk.images.linuxcontainers.org/meta/1.0/index-system"
@@ -61,6 +65,10 @@ DISTRO_METADATA = {
     "plamo": {"name": "Plamo Linux", "priority": 23, "icon": "📦"}
 }
 
+# CPU history for telemetry delta calculations: {name: (timestamp, usage_usec)}
+CPU_METRIC_HISTORY = {}
+METRIC_LOCK = threading.Lock()
+
 def run_cmd(cmd, timeout=30):
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -69,6 +77,22 @@ def run_cmd(cmd, timeout=30):
         return -1, "", f"Command timed out after {timeout}s"
     except Exception as e:
         return -1, "", str(e)
+
+def get_base_domain():
+    domain = os.environ.get("BASE_DOMAIN", "")
+    if domain:
+        return domain
+    caddyfile = "/etc/caddy/Caddyfile"
+    if os.path.exists(caddyfile):
+        try:
+            with open(caddyfile, "r", encoding="utf-8") as f:
+                content = f.read()
+                m = re.search(r"homelab\.([a-zA-Z0-9.\-]+)", content)
+                if m:
+                    return m.group(1).strip()
+        except Exception:
+            pass
+    return "lan"
 
 def get_target_arch():
     mach = platform.machine().lower()
@@ -82,90 +106,23 @@ def get_target_arch():
         return "i386"
     return "amd64"
 
-def get_fallback_catalog():
-    return {
-        "alpine": {
-            "name": "Alpine Linux (Ultra-light, ~270 KB RAM)",
-            "icon": "⚡",
-            "priority": 1,
-            "releases": [
-                {"id": "3.24", "name": "3.24 (Current Stable - Быстрый запуск)"},
-                {"id": "3.23", "name": "3.23"},
-                {"id": "3.22", "name": "3.22"},
-                {"id": "3.21", "name": "3.21"},
-                {"id": "edge", "name": "edge (Rolling)"}
-            ]
-        },
-        "kali": {
-            "name": "Kali Linux (Penetration Testing & Security)",
-            "icon": "🐉",
-            "priority": 2,
-            "releases": [
-                {"id": "current", "name": "current (Kali Rolling - Рекомендуется)"}
-            ]
-        },
-        "debian": {
-            "name": "Debian GNU/Linux (Стабильный / apt)",
-            "icon": "🌀",
-            "priority": 3,
-            "releases": [
-                {"id": "bookworm", "name": "12 Bookworm (Stable)"},
-                {"id": "trixie", "name": "13 Trixie (Testing)"},
-                {"id": "bullseye", "name": "11 Bullseye (Oldstable)"},
-                {"id": "sid", "name": "sid (Unstable)"}
-            ]
-        },
-        "ubuntu": {
-            "name": "Ubuntu Linux (Canonical LTS)",
-            "icon": "🐧",
-            "priority": 4,
-            "releases": [
-                {"id": "noble", "name": "24.04 LTS Noble Numbat"},
-                {"id": "jammy", "name": "22.04 LTS Jammy Jellyfish"},
-                {"id": "focal", "name": "20.04 LTS Focal Fossa"}
-            ]
-        },
-        "archlinux": {
-            "name": "Arch Linux (Rolling Release)",
-            "icon": "🏹",
-            "priority": 5,
-            "releases": [
-                {"id": "current", "name": "current (Daily Rolling)"}
-            ]
-        },
-        "fedora": {
-            "name": "Fedora Linux",
-            "icon": "🎩",
-            "priority": 6,
-            "releases": [
-                {"id": "41", "name": "41"},
-                {"id": "40", "name": "40"}
-            ]
-        },
-        "rockylinux": {
-            "name": "Rocky Linux (RHEL 9 Совместимый)",
-            "icon": "🏔️",
-            "priority": 7,
-            "releases": [
-                {"id": "9", "name": "9"},
-                {"id": "8", "name": "8"}
-            ]
-        },
-        "almalinux": {
-            "name": "AlmaLinux (RHEL 9 Совместимый)",
-            "icon": "🔴",
-            "priority": 8,
-            "releases": [
-                {"id": "9", "name": "9"},
-                {"id": "8", "name": "8"}
-            ]
-        }
-    }
+def reload_caddy():
+    caddyfile = "/etc/caddy/Caddyfile"
+    if os.path.exists(caddyfile):
+        code, out, err = run_cmd(["caddy", "reload", "--config", caddyfile])
+        if code != 0:
+            run_cmd(["rc-service", "caddy", "reload"])
+        return code == 0
+    return False
+
+# -----------------------------------------------------------------------------
+# Catalog Synchronization
+# -----------------------------------------------------------------------------
 
 def fetch_upstream_catalog(force=False):
     target_arch = get_target_arch()
 
-    # 1. Check local disk cache (valid for 6 hours unless force is requested)
+    # 1. Check local disk cache (valid for 6 hours)
     if not force and os.path.exists(CATALOG_CACHE_FILE):
         try:
             mtime = os.path.getmtime(CATALOG_CACHE_FILE)
@@ -177,7 +134,7 @@ def fetch_upstream_catalog(force=False):
         except Exception:
             pass
 
-    # 2. Fetch live index from images.linuxcontainers.org
+    # 2. Fetch live index
     raw_data = None
     headers = {"User-Agent": "lxc/7.0.0"}
     for url in [UPSTREAM_INDEX_URL, FALLBACK_INDEX_URL]:
@@ -191,7 +148,6 @@ def fetch_upstream_catalog(force=False):
             continue
 
     if not raw_data:
-        # Fallback to cached file if exists
         if os.path.exists(CATALOG_CACHE_FILE):
             try:
                 with open(CATALOG_CACHE_FILE, "r", encoding="utf-8") as f:
@@ -201,7 +157,7 @@ def fetch_upstream_catalog(force=False):
                 pass
         return get_fallback_catalog(), False, int(time.time())
 
-    # 3. Parse semicolon records: distro;release;arch;variant;build_date;path
+    # 3. Parse records
     distro_releases = {}
     for line in raw_data.splitlines():
         line = line.strip()
@@ -213,17 +169,14 @@ def fetch_upstream_catalog(force=False):
             if arch == target_arch and variant in ["default", "cloud"]:
                 distro_releases.setdefault(dist.lower(), set()).add(rel)
 
-    # Ensure alpine 3.24 is always in alpine releases
     if "alpine" in distro_releases:
         distro_releases["alpine"].add("3.24")
     else:
         distro_releases["alpine"] = {"3.24", "edge"}
 
-    # Ensure kali has current
     if "kali" in distro_releases:
         distro_releases["kali"].add("current")
 
-    # 4. Build catalog dictionary
     catalog = {}
     for dist, rel_set in distro_releases.items():
         meta = DISTRO_METADATA.get(dist, {
@@ -232,9 +185,7 @@ def fetch_upstream_catalog(force=False):
             "icon": "📦"
         })
 
-        # Release sorting key
         def release_sort_key(r):
-            # Recommended / current releases first
             if dist == "alpine" and r == "3.24":
                 return (0, 0)
             if dist == "kali" and r == "current":
@@ -269,10 +220,8 @@ def fetch_upstream_catalog(force=False):
             "releases": rel_objs
         }
 
-    # Sort catalog by priority then name
     sorted_catalog = dict(sorted(catalog.items(), key=lambda item: (item[1]["priority"], item[0])))
 
-    # Cache to disk
     try:
         os.makedirs(os.path.dirname(CATALOG_CACHE_FILE), exist_ok=True)
         with open(CATALOG_CACHE_FILE, "w", encoding="utf-8") as f:
@@ -285,6 +234,46 @@ def fetch_upstream_catalog(force=False):
         pass
 
     return sorted_catalog, False, int(time.time())
+
+def get_fallback_catalog():
+    return {
+        "alpine": {
+            "name": "Alpine Linux (Ultra-light, ~270 KB RAM)",
+            "icon": "⚡",
+            "priority": 1,
+            "releases": [
+                {"id": "3.24", "name": "3.24 (Current Stable - Быстрый запуск)"},
+                {"id": "3.23", "name": "3.23"},
+                {"id": "edge", "name": "edge"}
+            ]
+        },
+        "kali": {
+            "name": "Kali Linux (Penetration Testing & Security)",
+            "icon": "🐉",
+            "priority": 2,
+            "releases": [
+                {"id": "current", "name": "current (Kali Rolling - Рекомендуется)"}
+            ]
+        },
+        "debian": {
+            "name": "Debian GNU/Linux (Стабильный / apt)",
+            "icon": "🌀",
+            "priority": 3,
+            "releases": [
+                {"id": "bookworm", "name": "12 Bookworm (Stable)"},
+                {"id": "trixie", "name": "13 Trixie (Testing)"}
+            ]
+        },
+        "ubuntu": {
+            "name": "Ubuntu Linux (Canonical LTS)",
+            "icon": "🐧",
+            "priority": 4,
+            "releases": [
+                {"id": "noble", "name": "24.04 LTS Noble"},
+                {"id": "jammy", "name": "22.04 LTS Jammy"}
+            ]
+        }
+    }
 
 def get_cached_templates():
     cached_images = []
@@ -304,6 +293,10 @@ def get_cached_templates():
         cached_images.append("alpine:3.24")
     return list(set(cached_images))
 
+# -----------------------------------------------------------------------------
+# Container Details and Cgroup v2 Metrics
+# -----------------------------------------------------------------------------
+
 def parse_container_info(name):
     code, out, _ = run_cmd(["lxc-info", "-n", name], timeout=5)
     data = {
@@ -314,7 +307,10 @@ def parse_container_info(name):
         "memory": "-",
         "cpu": "-",
         "autostart": False,
-        "net_mode": "nat"
+        "net_mode": "nat",
+        "mem_limit": "max",
+        "cpu_limit": "max",
+        "routes_count": 0
     }
 
     for line in out.splitlines():
@@ -350,6 +346,41 @@ def parse_container_info(name):
                     m = re.search(r"^\s*lxc\.net\.0\.ipv4\.address\s*=\s*([0-9\.]+)", content, re.M)
                     if m:
                         data["ip"] = m.group(1)
+                # Parse limits from config
+                m_mem = re.search(r"^\s*lxc\.cgroup2\.memory\.max\s*=\s*([^\s]+)", content, re.M)
+                if m_mem:
+                    data["mem_limit"] = m_mem.group(1)
+                m_cpu = re.search(r"^\s*lxc\.cgroup2\.cpu\.max\s*=\s*([^\s]+)", content, re.M)
+                if m_cpu:
+                    data["cpu_limit"] = m_cpu.group(1)
+        except Exception:
+            pass
+
+    # Read live cgroups v2 limits if running
+    cg_path = f"/sys/fs/cgroup/lxc.payload.{name}"
+    if os.path.exists(cg_path):
+        try:
+            mem_max_file = os.path.join(cg_path, "memory.max")
+            if os.path.exists(mem_max_file):
+                with open(mem_max_file, "r") as f:
+                    val = f.read().strip()
+                    if val != "max":
+                        try:
+                            mb = int(val) // (1024 * 1024)
+                            data["mem_limit"] = f"{mb} MB"
+                        except ValueError:
+                            data["mem_limit"] = val
+                    else:
+                        data["mem_limit"] = "max"
+        except Exception:
+            pass
+
+    # Count published Caddy routes
+    if os.path.exists(CADDY_CONF_DIR):
+        try:
+            prefix = f"lxc-route-{name}-"
+            routes = [f for f in os.listdir(CADDY_CONF_DIR) if f.startswith(prefix) and f.endswith(".conf")]
+            data["routes_count"] = len(routes)
         except Exception:
             pass
 
@@ -432,7 +463,8 @@ def get_host_metrics():
             "percent": disk_pct
         },
         "counts": counts,
-        "suggested_ip": suggested_ip
+        "suggested_ip": suggested_ip,
+        "base_domain": get_base_domain()
     }
 
 # -----------------------------------------------------------------------------
@@ -465,7 +497,7 @@ def api_catalog_refresh():
     cached_images = get_cached_templates()
     return {
         "success": True,
-        "message": f"Каталог успешно синхронизирован с images.linuxcontainers.org! Найдено {len(catalog)} дистрибутивов.",
+        "message": f"Каталог синхронизирован с images.linuxcontainers.org! Найдено {len(catalog)} дистрибутивов.",
         "catalog": catalog,
         "cached": cached_images,
         "total_distros": len(catalog),
@@ -569,6 +601,10 @@ def api_containers():
     response.content_type = "application/json"
     return {"containers": get_containers()}
 
+# -----------------------------------------------------------------------------
+# Phase 1: Creation with Pre-seed, Limits & Cloning
+# -----------------------------------------------------------------------------
+
 @app.route("/api/containers/create", method="POST")
 def api_create():
     response.content_type = "application/json"
@@ -581,6 +617,12 @@ def api_create():
     ip = data.get("ip", "").strip()
     autostart = bool(data.get("autostart", False))
     start_now = bool(data.get("start_now", True))
+
+    # Phase 1: cgroup limits & pre-seed
+    memory_mb = int(data.get("memory_mb", 0) or 0)
+    cpu_quota = int(data.get("cpu_quota", 0) or 0)
+    ssh_key = data.get("ssh_key", "").strip()
+    init_script = data.get("init_script", "").strip()
 
     if not clean_name or len(clean_name) < 2 or len(clean_name) > 32:
         return {"success": False, "error": "Имя контейнера должно содержать от 2 до 32 символов (латинские буквы a-z, цифры, дефис или подчеркивание)."}
@@ -596,7 +638,6 @@ def api_create():
 
     try:
         if is_fast_clone:
-            # 1. Instant local minirootfs cloning (~1s)
             os.makedirs(rootfs_dir, exist_ok=True)
             code, _, err = run_cmd(["tar", "-xzf", MINIROOTFS_CACHE, "-C", rootfs_dir], timeout=30)
             if code != 0:
@@ -618,10 +659,18 @@ lxc.net.0.name = eth0
 lxc.net.0.ipv4.address = {ip}/24
 lxc.net.0.ipv4.gateway = 10.0.3.1"""
 
+            # Resource limits config directives
+            cgroup_cfg = ""
+            if memory_mb > 0:
+                cgroup_cfg += f"lxc.cgroup2.memory.max = {memory_mb}M\n"
+            if cpu_quota > 0:
+                quota = cpu_quota * 1000
+                cgroup_cfg += f"lxc.cgroup2.cpu.max = {quota} 100000\n"
+
             config_content = f"""lxc.uts.name = {name}
 lxc.rootfs.path = dir:{rootfs_dir}
 {net_cfg}
-lxc.tty.max = 4
+{cgroup_cfg}lxc.tty.max = 4
 lxc.pty.max = 1024
 lxc.mount.auto = proc:mixed sys:ro cgroup:mixed
 lxc.start.auto = {"1" if autostart else "0"}
@@ -651,7 +700,7 @@ lxc.start.auto = {"1" if autostart else "0"}
                 shutil.copy2("/etc/apk/repositories", os.path.join(apk_dir, "repositories"))
 
         else:
-            # 2. Official lxc-download template from images.linuxcontainers.org (Kali, Debian, Ubuntu, etc.)
+            # Official lxc-download template
             code, out, err = run_cmd([
                 "lxc-create", "-n", name, "-t", "download", "--",
                 "-d", distro, "-r", release, "-a", target_arch
@@ -660,14 +709,13 @@ lxc.start.auto = {"1" if autostart else "0"}
                 shutil.rmtree(target_dir, ignore_errors=True)
                 return {"success": False, "error": f"Ошибка создания контейнера (lxc-download): {err or out}"}
 
-            # Update container configuration for network mode
             cfg_path = os.path.join(target_dir, "config")
             if os.path.exists(cfg_path):
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     lines = f.readlines()
                 new_lines = []
                 for line in lines:
-                    if not line.strip().startswith("lxc.net.") and not line.strip().startswith("lxc.start.auto"):
+                    if not line.strip().startswith("lxc.net.") and not line.strip().startswith("lxc.start.auto") and not line.strip().startswith("lxc.cgroup2."):
                         new_lines.append(line)
 
                 if net_mode == "lan":
@@ -687,11 +735,16 @@ lxc.start.auto = {"1" if autostart else "0"}
                     new_lines.append(f"lxc.net.0.ipv4.address = {ip}/24\n")
                     new_lines.append("lxc.net.0.ipv4.gateway = 10.0.3.1\n")
 
+                if memory_mb > 0:
+                    new_lines.append(f"lxc.cgroup2.memory.max = {memory_mb}M\n")
+                if cpu_quota > 0:
+                    quota = cpu_quota * 1000
+                    new_lines.append(f"lxc.cgroup2.cpu.max = {quota} 100000\n")
+
                 new_lines.append(f"lxc.start.auto = {'1' if autostart else '0'}\n")
                 with open(cfg_path, "w", encoding="utf-8") as f:
                     f.writelines(new_lines)
 
-            # Pre-configure network inside container if rootfs exists
             if os.path.exists(rootfs_dir):
                 etc_dir = os.path.join(rootfs_dir, "etc")
                 os.makedirs(etc_dir, exist_ok=True)
@@ -705,16 +758,534 @@ lxc.start.auto = {"1" if autostart else "0"}
                     except Exception:
                         pass
 
+        # Pre-seed: Inject SSH Public Key
+        if ssh_key and os.path.exists(rootfs_dir):
+            try:
+                ssh_dir = os.path.join(rootfs_dir, "root", ".ssh")
+                os.makedirs(ssh_dir, exist_ok=True)
+                os.chmod(ssh_dir, 0o700)
+                ak_path = os.path.join(ssh_dir, "authorized_keys")
+                with open(ak_path, "a", encoding="utf-8") as f:
+                    f.write("\n" + ssh_key.strip() + "\n")
+                os.chmod(ak_path, 0o600)
+            except Exception:
+                pass
+
+        # Pre-seed: Post-install Init Script
+        if init_script and os.path.exists(rootfs_dir):
+            try:
+                init_sh = os.path.join(rootfs_dir, "root", "init-setup.sh")
+                with open(init_sh, "w", encoding="utf-8") as f:
+                    f.write("#!/bin/sh\n" + init_script.strip() + "\n")
+                os.chmod(init_sh, 0o755)
+            except Exception:
+                pass
+
         if start_now:
             s_code, _, s_err = run_cmd(["lxc-start", "-n", name, "-d"])
             if s_code != 0:
-                return {"success": True, "message": f"Контейнер '{name}' создан, но не смог запуститься автоматически: {s_err}", "warning": s_err}
+                return {"success": True, "message": f"Контейнер '{name}' создан, но не смог запуститься: {s_err}", "warning": s_err}
 
-        return {"success": True, "message": f"Контейнер '{name}' ({distro} {release}) успешно создан и запущен!"}
+            # Asynchronously execute init-setup.sh if present
+            if init_script:
+                def _run_init():
+                    time.sleep(2.5)
+                    run_cmd(["lxc-attach", "-n", name, "--", "/root/init-setup.sh"], timeout=180)
+                threading.Thread(target=_run_init, daemon=True).start()
+
+        return {"success": True, "message": f"Контейнер '{name}' ({distro} {release}) успешно создан!"}
 
     except Exception as e:
         shutil.rmtree(target_dir, ignore_errors=True)
         return {"success": False, "error": str(e)}
+
+@app.route("/api/containers/<name>/limits", method="GET")
+def api_get_limits(name):
+    response.content_type = "application/json"
+    target_dir = os.path.join(LXC_DIR, name)
+    if not os.path.exists(target_dir):
+        return {"success": False, "error": "Container does not exist."}
+
+    cfg_file = os.path.join(target_dir, "config")
+    mem_mb = 0
+    cpu_quota = 0
+
+    if os.path.exists(cfg_file):
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            content = f.read()
+            m_mem = re.search(r"^\s*lxc\.cgroup2\.memory\.max\s*=\s*(\d+)M", content, re.M)
+            if m_mem:
+                mem_mb = int(m_mem.group(1))
+            m_cpu = re.search(r"^\s*lxc\.cgroup2\.cpu\.max\s*=\s*(\d+)", content, re.M)
+            if m_cpu:
+                cpu_quota = int(m_cpu.group(1)) // 1000
+
+    # Live cgroup status
+    cg_path = f"/sys/fs/cgroup/lxc.payload.{name}"
+    current_mem_mb = 0
+    if os.path.exists(cg_path):
+        cur_file = os.path.join(cg_path, "memory.current")
+        if os.path.exists(cur_file):
+            try:
+                with open(cur_file, "r") as f:
+                    current_mem_mb = round(int(f.read().strip()) / (1024 * 1024), 1)
+            except Exception:
+                pass
+
+    return {
+        "success": True,
+        "name": name,
+        "memory_mb": mem_mb,
+        "cpu_quota": cpu_quota,
+        "current_mem_mb": current_mem_mb
+    }
+
+@app.route("/api/containers/<name>/limits", method="POST")
+def api_set_limits(name):
+    response.content_type = "application/json"
+    data = request.json or {}
+    target_dir = os.path.join(LXC_DIR, name)
+    if not os.path.exists(target_dir):
+        return {"success": False, "error": "Container does not exist."}
+
+    try:
+        mem_mb = int(data.get("memory_mb", 0) or 0)
+        cpu_quota = int(data.get("cpu_quota", 0) or 0)
+    except ValueError:
+        return {"success": False, "error": "Invalid limit values."}
+
+    cfg_file = os.path.join(target_dir, "config")
+    if os.path.exists(cfg_file):
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        new_lines = []
+        for line in lines:
+            if not line.strip().startswith("lxc.cgroup2.memory.max") and not line.strip().startswith("lxc.cgroup2.cpu.max"):
+                new_lines.append(line)
+
+        if mem_mb > 0:
+            new_lines.append(f"lxc.cgroup2.memory.max = {mem_mb}M\n")
+        if cpu_quota > 0:
+            quota = cpu_quota * 1000
+            new_lines.append(f"lxc.cgroup2.cpu.max = {quota} 100000\n")
+
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+    # Apply on-the-fly via lxc-cgroup if running
+    c_info = parse_container_info(name)
+    if c_info.get("state") == "RUNNING":
+        mem_arg = f"{mem_mb}M" if mem_mb > 0 else "max"
+        run_cmd(["lxc-cgroup", "-n", name, "memory.max", mem_arg])
+        cpu_arg = f"{cpu_quota * 1000} 100000" if cpu_quota > 0 else "max 100000"
+        run_cmd(["lxc-cgroup", "-n", name, "cpu.max", cpu_arg])
+
+    return {"success": True, "message": f"Лимиты для '{name}' успешно обновлены (RAM: {mem_mb or 'без лимита'} MB, CPU: {cpu_quota or 'без лимита'}%)!"}
+
+@app.route("/api/containers/<name>/clone", method="POST")
+def api_clone(name):
+    response.content_type = "application/json"
+    data = request.json or {}
+    new_name = data.get("new_name", "").strip()
+    clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "-", new_name).strip("-").lower()
+    start_now = bool(data.get("start_now", True))
+
+    if not clean_name or len(clean_name) < 2 or len(clean_name) > 32:
+        return {"success": False, "error": "Имя нового контейнера должно содержать от 2 до 32 символов."}
+
+    src_dir = os.path.join(LXC_DIR, name)
+    dest_dir = os.path.join(LXC_DIR, clean_name)
+    if not os.path.exists(src_dir):
+        return {"success": False, "error": f"Исходный контейнер '{name}' не найден."}
+    if os.path.exists(dest_dir):
+        return {"success": False, "error": f"Контейнер с именем '{clean_name}' уже существует."}
+
+    c_info = parse_container_info(name)
+    was_running = (c_info.get("state") == "RUNNING")
+    if was_running:
+        run_cmd(["lxc-stop", "-n", name, "-k"])
+
+    try:
+        code, out, err = run_cmd(["lxc-copy", "-n", name, "-N", clean_name], timeout=300)
+        if code != 0:
+            return {"success": False, "error": f"Ошибка клонирования: {err or out}"}
+
+        # Update IP in clone config if NAT
+        cfg_path = os.path.join(dest_dir, "config")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            # If NAT with static IP, assign next available IP
+            if "10.0.3." in content:
+                metrics = get_host_metrics()
+                new_ip = metrics.get("suggested_ip", "10.0.3.50")
+                content = re.sub(r"lxc\.net\.0\.ipv4\.address\s*=\s*10\.0\.3\.\d+", f"lxc.net.0.ipv4.address = {new_ip}", content)
+                with open(cfg_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+        if start_now:
+            run_cmd(["lxc-start", "-n", clean_name, "-d"])
+
+        return {"success": True, "message": f"Контейнер '{clean_name}' успешно клонирован из '{name}'!"}
+    finally:
+        if was_running:
+            run_cmd(["lxc-start", "-n", name, "-d"])
+
+# -----------------------------------------------------------------------------
+# Phase 2: 1-Click Caddy Ingress & Port Publishing
+# -----------------------------------------------------------------------------
+
+@app.route("/api/containers/<name>/routes", method="GET")
+def api_get_routes(name):
+    response.content_type = "application/json"
+    os.makedirs(CADDY_CONF_DIR, exist_ok=True)
+    base_domain = get_base_domain()
+    prefix = f"lxc-route-{name}-"
+    routes = []
+
+    for fname in os.listdir(CADDY_CONF_DIR):
+        if fname.startswith(prefix) and fname.endswith(".conf"):
+            subdomain = fname[len(prefix):-5]
+            fpath = os.path.join(CADDY_CONF_DIR, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    port_m = re.search(r"reverse_proxy\s+[0-9.]+:\s*(\d+)", content)
+                    port = port_m.group(1) if port_m else "?"
+                    has_auth = "import homelab_auth" in content
+                    routes.append({
+                        "subdomain": subdomain,
+                        "full_domain": f"{subdomain}.{base_domain}",
+                        "port": port,
+                        "auth": has_auth
+                    })
+            except Exception:
+                pass
+
+    return {
+        "success": True,
+        "name": name,
+        "base_domain": base_domain,
+        "routes": sorted(routes, key=lambda x: x["subdomain"])
+    }
+
+@app.route("/api/containers/<name>/routes", method="POST")
+def api_create_route(name):
+    response.content_type = "application/json"
+    data = request.json or {}
+    subdomain = re.sub(r"[^a-zA-Z0-9_\-]", "-", data.get("subdomain", "")).strip("-").lower()
+    port = str(data.get("port", "")).strip()
+    with_auth = bool(data.get("auth", True))
+
+    if not subdomain or len(subdomain) < 2:
+        return {"success": False, "error": "Поддомен должен содержать от 2 символов (латиница, цифры, дефис)."}
+    if not port.isdigit() or int(port) < 1 or int(port) > 65535:
+        return {"success": False, "error": "Укажите корректный порт (1-65535)."}
+
+    c_info = parse_container_info(name)
+    target_ip = None
+    if c_info.get("ip") and c_info["ip"] != "-":
+        target_ip = c_info["ip"].split(",")[0].strip()
+
+    if not target_ip:
+        return {"success": False, "error": "Не удалось определить IP контейнера. Запустите контейнер для назначения IP."}
+
+    os.makedirs(CADDY_CONF_DIR, exist_ok=True)
+    base_domain = get_base_domain()
+    conf_file = os.path.join(CADDY_CONF_DIR, f"lxc-route-{name}-{subdomain}.conf")
+
+    auth_snippet = "    import homelab_auth\n" if with_auth else ""
+    conf_content = f"""{subdomain}.{base_domain} {{
+{auth_snippet}    reverse_proxy {target_ip}:{port} {{
+        header_up Upgrade {{>Upgrade}}
+        header_up Connection {{>Connection}}
+    }}
+}}
+"""
+    try:
+        with open(conf_file, "w", encoding="utf-8") as f:
+            f.write(conf_content)
+        reload_caddy()
+        return {
+            "success": True,
+            "message": f"Маршрут https://{subdomain}.{base_domain} успешно опубликован!",
+            "url": f"https://{subdomain}.{base_domain}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.route("/api/containers/<name>/routes/<subdomain>", method="DELETE")
+def api_delete_route(name, subdomain):
+    response.content_type = "application/json"
+    subdomain = re.sub(r"[^a-zA-Z0-9_\-]", "-", subdomain).strip("-").lower()
+    conf_file = os.path.join(CADDY_CONF_DIR, f"lxc-route-{name}-{subdomain}.conf")
+
+    if os.path.exists(conf_file):
+        try:
+            os.remove(conf_file)
+            reload_caddy()
+            return {"success": True, "message": f"Маршрут для '{subdomain}' удален."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    return {"success": False, "error": "Маршрут не найден."}
+
+# -----------------------------------------------------------------------------
+# Phase 3: Inline Rootfs File Explorer & Web Code Editor
+# -----------------------------------------------------------------------------
+
+def resolve_container_fs_path(name, req_path):
+    rootfs_dir = os.path.join(LXC_DIR, name, "rootfs")
+    if not os.path.exists(rootfs_dir):
+        return None, None
+    safe_rel = os.path.normpath("/" + req_path.lstrip("/")).lstrip("/")
+    full_path = os.path.abspath(os.path.join(rootfs_dir, safe_rel))
+    if os.path.commonpath([full_path, rootfs_dir]) != rootfs_dir:
+        return None, None
+    return full_path, "/" + safe_rel
+
+@app.route("/api/containers/<name>/fs/list", method="GET")
+def api_fs_list(name):
+    response.content_type = "application/json"
+    req_path = request.query.get("path", "/")
+    full_path, safe_rel = resolve_container_fs_path(name, req_path)
+
+    if not full_path or not os.path.exists(full_path):
+        return {"success": False, "error": f"Каталог '{req_path}' не найден."}
+    if not os.path.isdir(full_path):
+        return {"success": False, "error": "Указанный путь не является каталогом."}
+
+    items = []
+    try:
+        for entry in os.scandir(full_path):
+            try:
+                st = entry.stat()
+                is_dir = entry.is_dir()
+                items.append({
+                    "name": entry.name,
+                    "is_dir": is_dir,
+                    "size": st.st_size if not is_dir else 0,
+                    "mtime": int(st.st_mtime),
+                    "mode": oct(st.st_mode)[-3:]
+                })
+            except Exception:
+                pass
+    except PermissionError:
+        return {"success": False, "error": "Доступ запрещен (Permission denied)."}
+
+    items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+    parent = os.path.dirname(safe_rel) if safe_rel != "/" else None
+    if parent == safe_rel:
+        parent = None
+
+    return {
+        "success": True,
+        "path": safe_rel,
+        "parent": parent,
+        "items": items
+    }
+
+@app.route("/api/containers/<name>/fs/read", method="GET")
+def api_fs_read(name):
+    response.content_type = "application/json"
+    req_path = request.query.get("path", "")
+    full_path, safe_rel = resolve_container_fs_path(name, req_path)
+
+    if not full_path or not os.path.isfile(full_path):
+        return {"success": False, "error": "Файл не найден."}
+
+    if os.path.getsize(full_path) > 2 * 1024 * 1024:
+        return {"success": False, "error": "Файл слишком большой (> 2 МБ) для веб-редактора."}
+
+    try:
+        with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        return {
+            "success": True,
+            "path": safe_rel,
+            "content": content,
+            "size": os.path.getsize(full_path)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.route("/api/containers/<name>/fs/write", method="POST")
+def api_fs_write(name):
+    response.content_type = "application/json"
+    data = request.json or {}
+    req_path = data.get("path", "")
+    content = data.get("content", "")
+    full_path, safe_rel = resolve_container_fs_path(name, req_path)
+
+    if not full_path:
+        return {"success": False, "error": "Некорректный путь к файлу."}
+
+    try:
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"success": True, "message": f"Файл '{safe_rel}' успешно сохранен!"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.route("/api/containers/<name>/fs/download", method="GET")
+def api_fs_download(name):
+    req_path = request.query.get("path", "")
+    full_path, safe_rel = resolve_container_fs_path(name, req_path)
+
+    if not full_path or not os.path.isfile(full_path):
+        abort(404, "File not found")
+
+    return static_file(os.path.basename(full_path), root=os.path.dirname(full_path), download=True)
+
+# -----------------------------------------------------------------------------
+# Phase 4: Live Telemetry Graphs & Backup Export/Import
+# -----------------------------------------------------------------------------
+
+@app.route("/api/containers/<name>/stats", method="GET")
+def api_stats(name):
+    response.content_type = "application/json"
+    now = time.time()
+    cg_path = f"/sys/fs/cgroup/lxc.payload.{name}"
+
+    mem_current = 0
+    mem_max = "max"
+    cpu_usage_usec = 0
+
+    if os.path.exists(cg_path):
+        try:
+            with open(os.path.join(cg_path, "memory.current"), "r") as f:
+                mem_current = int(f.read().strip())
+        except Exception:
+            pass
+        try:
+            with open(os.path.join(cg_path, "memory.max"), "r") as f:
+                mem_max = f.read().strip()
+        except Exception:
+            pass
+        try:
+            with open(os.path.join(cg_path, "cpu.stat"), "r") as f:
+                for line in f:
+                    if line.startswith("usage_usec"):
+                        cpu_usage_usec = int(line.split()[1])
+                        break
+        except Exception:
+            pass
+
+    # Calculate CPU % delta
+    cpu_pct = 0.0
+    with METRIC_LOCK:
+        if name in CPU_METRIC_HISTORY:
+            prev_time, prev_usec = CPU_METRIC_HISTORY[name]
+            delta_t = now - prev_time
+            if delta_t > 0.4:
+                delta_u = max(0, cpu_usage_usec - prev_usec)
+                cpu_pct = round((delta_u / (delta_t * 1000000)) * 100, 1)
+        CPU_METRIC_HISTORY[name] = (now, cpu_usage_usec)
+
+    mem_used_mb = round(mem_current / (1024 * 1024), 1)
+    mem_limit_mb = round(int(mem_max) / (1024 * 1024), 1) if mem_max.isdigit() else 0
+
+    return {
+        "success": True,
+        "name": name,
+        "cpu_pct": cpu_pct,
+        "mem_used_mb": mem_used_mb,
+        "mem_limit_mb": mem_limit_mb,
+        "timestamp": int(now * 1000)
+    }
+
+@app.route("/api/containers/<name>/export", method="POST")
+def api_export(name):
+    response.content_type = "application/json"
+    src_dir = os.path.join(LXC_DIR, name)
+    if not os.path.exists(src_dir):
+        return {"success": False, "error": "Container does not exist."}
+
+    os.makedirs(os.path.join(LXC_DIR, "cache"), exist_ok=True)
+    archive_name = f"backup-{name}-{int(time.time())}.tar.gz"
+    archive_path = os.path.join(LXC_DIR, "cache", archive_name)
+
+    c_info = parse_container_info(name)
+    was_running = (c_info.get("state") == "RUNNING")
+    if was_running:
+        run_cmd(["lxc-stop", "-n", name, "-k"])
+
+    try:
+        cmd = ["tar", "-czf", archive_path, "-C", LXC_DIR, name]
+        code, out, err = run_cmd(cmd, timeout=300)
+        if code == 0:
+            return {
+                "success": True,
+                "message": f"Бэкап '{name}' успешно создан!",
+                "download_url": f"/api/containers/backups/{archive_name}"
+            }
+        return {"success": False, "error": f"Ошибка архивации: {err or out}"}
+    finally:
+        if was_running:
+            run_cmd(["lxc-start", "-n", name, "-d"])
+
+@app.route("/api/containers/backups/<filename>", method="GET")
+def api_download_backup(filename):
+    cache_dir = os.path.join(LXC_DIR, "cache")
+    if not re.match(r"^backup-[a-zA-Z0-9_\-]+\.tar\.gz$", filename):
+        abort(400, "Invalid backup filename")
+    return static_file(filename, root=cache_dir, download=True)
+
+@app.route("/api/containers/import", method="POST")
+def api_import():
+    response.content_type = "application/json"
+    upload = request.files.get("backup_file")
+    new_name = request.forms.get("name", "").strip()
+    clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "-", new_name).strip("-").lower()
+
+    if not clean_name or len(clean_name) < 2:
+        return {"success": False, "error": "Укажите корректное имя для импортируемого контейнера."}
+    if not upload:
+        return {"success": False, "error": "Файл архива (.tar.gz) не выбран."}
+
+    target_dir = os.path.join(LXC_DIR, clean_name)
+    if os.path.exists(target_dir):
+        return {"success": False, "error": f"Контейнер '{clean_name}' уже существует."}
+
+    tmp_archive = f"/tmp/import-{clean_name}-{int(time.time())}.tar.gz"
+    try:
+        upload.save(tmp_archive, overwrite=True)
+        # Extract archive
+        tmp_extract = f"/tmp/extract-{clean_name}-{int(time.time())}"
+        os.makedirs(tmp_extract, exist_ok=True)
+        code, _, err = run_cmd(["tar", "-xzf", tmp_archive, "-C", tmp_extract])
+        if code != 0:
+            return {"success": False, "error": f"Ошибка распаковки архива: {err}"}
+
+        # Find extracted container dir
+        entries = os.listdir(tmp_extract)
+        extracted_dir = os.path.join(tmp_extract, entries[0]) if len(entries) == 1 else tmp_extract
+
+        # Move to /var/lib/lxc/<clean_name>
+        shutil.move(extracted_dir, target_dir)
+
+        # Fix config
+        cfg_path = os.path.join(target_dir, "config")
+        if os.path.exists(cfg_path):
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            content = re.sub(r"lxc\.uts\.name\s*=\s*[^\s]+", f"lxc.uts.name = {clean_name}", content)
+            content = re.sub(r"lxc\.rootfs\.path\s*=\s*dir:[^\s]+", f"lxc.rootfs.path = dir:{target_dir}/rootfs", content)
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+        return {"success": True, "message": f"Контейнер '{clean_name}' успешно импортирован!"}
+    except Exception as e:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        return {"success": False, "error": str(e)}
+    finally:
+        if os.path.exists(tmp_archive):
+            os.remove(tmp_archive)
+        shutil.rmtree(f"/tmp/extract-{clean_name}", ignore_errors=True)
+
+# -----------------------------------------------------------------------------
+# Container Standard Actions
+# -----------------------------------------------------------------------------
 
 @app.route("/api/containers/<name>/action", method="POST")
 def api_action(name):
@@ -754,6 +1325,16 @@ def api_action(name):
     elif action == "destroy":
         run_cmd(["lxc-stop", "-n", name, "-k"])
         run_cmd(["lxc-snapshot", "-n", name, "-d", "ALL"])
+        # Clean up associated Caddy routes
+        if os.path.exists(CADDY_CONF_DIR):
+            prefix = f"lxc-route-{name}-"
+            for fname in os.listdir(CADDY_CONF_DIR):
+                if fname.startswith(prefix):
+                    try:
+                        os.remove(os.path.join(CADDY_CONF_DIR, fname))
+                    except Exception:
+                        pass
+            reload_caddy()
         code, out, err = run_cmd(["lxc-destroy", "-n", name, "-f"])
         return {"success": code == 0, "message": "Container destroyed" if code == 0 else err}
 
@@ -780,7 +1361,7 @@ def api_action(name):
     return {"success": False, "error": "Unknown action: " + action}
 
 # -----------------------------------------------------------------------------
-# Snapshot Management Endpoints (lxc-snapshot)
+# Snapshot Management
 # -----------------------------------------------------------------------------
 
 @app.route("/api/containers/<name>/snapshots", method="GET")
@@ -841,7 +1422,6 @@ def api_snapshots_restore(name):
         return {"success": False, "error": "Snapshot name is required."}
 
     run_cmd(["lxc-stop", "-n", name, "-k"])
-
     cmd = ["lxc-snapshot", "-n", name, "-r", snap_name]
     if new_name:
         cmd.extend(["-N", new_name])
@@ -869,10 +1449,6 @@ def api_snapshots_destroy(name):
         return {"success": True, "message": f"Снимок '{snap_name}' успешно удален."}
     return {"success": False, "error": err or out}
 
-# -----------------------------------------------------------------------------
-# Quick Command Runner Exec Endpoint (lxc-attach)
-# -----------------------------------------------------------------------------
-
 @app.route("/api/containers/<name>/exec", method="POST")
 def api_exec(name):
     response.content_type = "application/json"
@@ -883,15 +1459,12 @@ def api_exec(name):
         return {"success": False, "error": "Command cannot be empty."}
 
     t0 = time.time()
-    code, out, err = run_cmd(["lxc-attach", "-n", name, "--", "sh", "-c", cmd], timeout=20)
+    code, out, err = run_cmd(["lxc-attach", "-n", name, "--", "sh", "-c", cmd], timeout=25)
     dur_ms = round((time.time() - t0) * 1000)
 
     combined_output = out
     if err:
-        if combined_output:
-            combined_output += "\n" + err
-        else:
-            combined_output = err
+        combined_output = (combined_output + "\n" + err) if combined_output else err
 
     return {
         "success": True,
@@ -901,14 +1474,14 @@ def api_exec(name):
     }
 
 # -----------------------------------------------------------------------------
-# Modern Fully Responsive Single-Page Dashboard UI
+# Modern Single-Page Dashboard UI
 # -----------------------------------------------------------------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>📦 LXC Sandbox Manager</title>
+    <title>📦 LXC Sandbox Manager 2.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -929,7 +1502,6 @@ INDEX_HTML = """<!DOCTYPE html>
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-        /* Custom scrollbars */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
         ::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 4px; }
@@ -958,19 +1530,22 @@ INDEX_HTML = """<!DOCTYPE html>
                 </div>
                 <div class="min-w-0">
                     <h1 class="text-lg sm:text-xl font-bold tracking-tight text-white flex items-center gap-2 flex-wrap">
-                        <span>LXC Sandbox Manager</span>
+                        <span>LXC Manager 2.0</span>
                         <span class="text-[11px] bg-brand-500/20 text-brand-400 border border-brand-500/30 px-2 py-0.5 rounded-full font-mono">Alpine 3.24</span>
                     </h1>
-                    <p class="text-[11px] sm:text-xs text-slate-400 truncate">Песочница, снимки и веб-терминалы LinuxContainers</p>
+                    <p class="text-[11px] sm:text-xs text-slate-400 truncate">Zero-Docker Sandbox, лимиты cgroup v2, Ingress и файлы</p>
                 </div>
             </div>
 
             <!-- Action Buttons -->
-            <div class="flex items-center gap-2 sm:gap-3 self-end sm:self-center w-full sm:w-auto">
-                <button onclick="openTemplatesModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs sm:text-sm px-3 sm:px-3.5 py-2 rounded-lg transition active:scale-95 shadow-sm font-medium">
-                    <span>📥</span> <span>Шаблоны ОС</span>
+            <div class="flex items-center gap-2 sm:gap-2.5 flex-wrap self-end sm:self-center w-full sm:w-auto">
+                <button onclick="openTemplatesModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs px-3 py-2 rounded-lg transition active:scale-95 shadow-sm font-medium">
+                    <span>📥</span> <span>Шаблоны</span>
                 </button>
-                <button onclick="openCreateModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium text-xs sm:text-sm px-3.5 sm:px-4 py-2 rounded-lg shadow-md shadow-blue-600/20 transition-all active:scale-95">
+                <button onclick="openImportModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs px-3 py-2 rounded-lg transition active:scale-95 shadow-sm font-medium">
+                    <span>📤</span> <span>Импорт</span>
+                </button>
+                <button onclick="openCreateModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium text-xs px-3.5 py-2 rounded-lg shadow-md shadow-blue-600/20 transition-all active:scale-95">
                     <span>⚡</span> <span>Создать Sandbox</span>
                 </button>
                 <button onclick="refreshData()" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition shrink-0 active:scale-95" title="Обновить статус">
@@ -983,11 +1558,10 @@ INDEX_HTML = """<!DOCTYPE html>
     <!-- Main Content Area -->
     <main class="max-w-7xl 2xl:max-w-[1700px] mx-auto w-full px-4 sm:px-6 py-5 sm:py-6 flex-1 space-y-5 sm:space-y-6">
 
-        <!-- Host Metrics Bar: 2 cols on mobile, 4 cols on desktop -->
+        <!-- Host Metrics Bar -->
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-            <!-- CPU Load -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
-                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1">
                     <span>CPU Нагрузка</span>
                     <span class="text-blue-400 font-mono text-[10px] sm:text-xs">LoadAvg</span>
                 </div>
@@ -995,9 +1569,8 @@ INDEX_HTML = """<!DOCTYPE html>
                 <div class="text-[10px] sm:text-xs text-slate-500 mt-1">1, 5, 15 мин</div>
             </div>
 
-            <!-- Host RAM -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
-                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1">
                     <span>RAM Хоста</span>
                     <span id="stat-ram-pct" class="text-emerald-400 font-mono text-[10px] sm:text-xs">0%</span>
                 </div>
@@ -1007,9 +1580,8 @@ INDEX_HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- LXC Storage -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
-                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1">
                     <span>Диск LXC</span>
                     <span id="stat-disk-pct" class="text-cyan-400 font-mono text-[10px] sm:text-xs">0%</span>
                 </div>
@@ -1019,10 +1591,9 @@ INDEX_HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Sandbox Counts -->
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
-                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
-                    <span>Sandbox Контейнеры</span>
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1">
+                    <span>Контейнеры</span>
                     <span class="text-purple-400 font-mono text-[10px] sm:text-xs">LXC</span>
                 </div>
                 <div class="flex items-baseline gap-1.5">
@@ -1041,7 +1612,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <h2 class="font-bold text-white text-sm sm:text-base flex items-center gap-2">
                         <span>Тестовые контейнеры</span>
                     </h2>
-                    <p class="text-[11px] sm:text-xs text-slate-400 hidden sm:block">Поддержка Kali Linux, Debian, Ubuntu, Alpine, мгновенных снимков и веб-терминала</p>
+                    <p class="text-[11px] sm:text-xs text-slate-400 hidden sm:block">Kali, Debian, Ubuntu, Alpine, мгновенное клонирование, Ingress и лимиты ресурсов</p>
                 </div>
                 <div class="flex items-center gap-1.5 sm:gap-2">
                     <span class="text-[11px] text-slate-400 hidden sm:inline">Автообновление:</span>
@@ -1059,56 +1630,30 @@ INDEX_HTML = """<!DOCTYPE html>
                 <table class="w-full text-left border-collapse">
                     <thead>
                         <tr class="bg-slate-950/60 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
-                            <th class="py-3 px-6">Контейнер</th>
-                            <th class="py-3 px-6">Статус</th>
-                            <th class="py-3 px-6">Сеть / IP</th>
-                            <th class="py-3 px-6">Память / RAM</th>
-                            <th class="py-3 px-6">CPU Время</th>
-                            <th class="py-3 px-6">Автостарт</th>
-                            <th class="py-3 px-6 text-right">Действия</th>
+                            <th class="py-3 px-5">Контейнер</th>
+                            <th class="py-3 px-4">Статус</th>
+                            <th class="py-3 px-5">Сеть / IP</th>
+                            <th class="py-3 px-4">Память / RAM</th>
+                            <th class="py-3 px-4">Лимиты cgroup</th>
+                            <th class="py-3 px-4">Ingress</th>
+                            <th class="py-3 px-4">Автостарт</th>
+                            <th class="py-3 px-5 text-right">Действия</th>
                         </tr>
                     </thead>
                     <tbody id="containers-table" class="divide-y divide-slate-800 text-sm">
                         <tr>
-                            <td colspan="7" class="py-12 text-center text-slate-500">Загрузка списка контейнеров...</td>
+                            <td colspan="8" class="py-12 text-center text-slate-500">Загрузка списка контейнеров...</td>
                         </tr>
                     </tbody>
                 </table>
             </div>
         </div>
 
-        <!-- Guide Footer -->
-        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-4 sm:p-6">
-            <h3 class="text-xs sm:text-sm font-bold text-white mb-2 flex items-center gap-2">
-                <span>💡</span> Возможности экосистемы LXC Sandbox
-            </h3>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-slate-400">
-                <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-800/80">
-                    <div class="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
-                        <span>🌐</span> Сеть LAN (DHCP) или NAT
-                    </div>
-                    Режим LAN подключает контейнер напрямую к домашнему роутеру (192.168.1.x), а NAT изолирует его в подсети 10.0.3.x.
-                </div>
-                <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-800/80">
-                    <div class="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
-                        <span>📸</span> Мгновенные снимки (Rollback)
-                    </div>
-                    Фиксируйте снимок системы перед экспериментами и откатывайтесь в один клик через lxc-snapshot.
-                </div>
-                <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-800/80">
-                    <div class="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
-                        <span>📟</span> Полноэкранный Web Shell (ttyd)
-                    </div>
-                    Интерактивный шелл xterm.js с поддержкой htop, цветов, стрелочек, Tab и разворотом во весь экран.
-                </div>
-            </div>
-        </div>
-
     </main>
 
-    <!-- Create Container Modal -->
+    <!-- Create Container Modal (with Limits & Pre-seed) -->
     <div id="create-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[92vh] flex flex-col">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[92vh] flex flex-col">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
                 <h3 class="font-bold text-white text-base sm:text-lg flex items-center gap-2">
                     <span>⚡</span> Новый Sandbox Контейнер
@@ -1119,11 +1664,11 @@ INDEX_HTML = """<!DOCTYPE html>
             <form id="create-form" onsubmit="handleCreate(event)" class="space-y-4 text-xs sm:text-sm overflow-y-auto pr-1 flex-1">
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Имя контейнера</label>
-                    <input type="text" id="new-name" required placeholder="например: kali-pentest, test-sandbox, dev-node" oninput="this.value = this.value.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+                    <input type="text" id="new-name" required placeholder="например: kali-pentest, dev-node-1" oninput="this.value = this.value.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
                     <p class="text-[11px] text-slate-500 mt-1">Латиница a-z, цифры и дефис (2-32 символа).</p>
                 </div>
 
-                <!-- Cascade Distro & Version Select -->
+                <!-- Distro & Version Select -->
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <div class="flex items-center justify-between mb-1">
@@ -1131,19 +1676,35 @@ INDEX_HTML = """<!DOCTYPE html>
                             <span id="distro-count-badge" class="text-[10px] text-brand-400 font-mono">23 ОС</span>
                         </div>
                         <select id="new-distro" onchange="updateReleaseDropdown()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs truncate">
-                            <!-- Populated dynamically via JS from live catalog -->
                         </select>
                     </div>
 
                     <div>
                         <label class="block text-xs font-medium text-slate-300 mb-1">Версия / Релиз</label>
                         <select id="new-release" onchange="updateCacheHint()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs font-mono">
-                            <!-- Populated dynamically via JS -->
                         </select>
                     </div>
                 </div>
 
                 <div id="distro-cache-hint" class="text-xs pt-0.5"></div>
+
+                <!-- Resource Limits (cgroup v2) -->
+                <div class="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2.5">
+                    <label class="block text-xs font-semibold text-white flex items-center justify-between">
+                        <span>🎛️ Лимиты ресурсов (cgroup v2):</span>
+                        <span class="text-[10px] text-slate-400 font-normal">0 = без ограничений</span>
+                    </label>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-1">RAM Limit (MB)</label>
+                            <input type="number" id="new-mem-mb" placeholder="например: 512" min="0" max="65536" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-1">CPU Quota (%)</label>
+                            <input type="number" id="new-cpu-quota" placeholder="например: 50 (50%)" min="0" max="800" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                        </div>
+                    </div>
+                </div>
 
                 <!-- Network Mode Radio -->
                 <div class="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2">
@@ -1152,14 +1713,14 @@ INDEX_HTML = """<!DOCTYPE html>
                         <input type="radio" name="net_mode" value="lan" checked onchange="toggleNetModeUI()" class="mt-0.5 text-brand-600 bg-slate-900 border-slate-700 focus:ring-0">
                         <div>
                             <span class="text-xs font-medium text-slate-200">Домашняя сеть LAN (br0 - DHCP от роутера)</span>
-                            <p class="text-[11px] text-slate-400">Контейнер получит реальный домашний IP (192.168.1.X) и будет виден в сети как отдельный ПК.</p>
+                            <p class="text-[11px] text-slate-400">Реальный домашний IP (192.168.1.X), виден в сети как отдельный ПК.</p>
                         </div>
                     </label>
                     <label class="flex items-start gap-2.5 cursor-pointer pt-1">
                         <input type="radio" name="net_mode" value="nat" onchange="toggleNetModeUI()" class="mt-0.5 text-brand-600 bg-slate-900 border-slate-700 focus:ring-0">
                         <div>
                             <span class="text-xs font-medium text-slate-200">Изолированная песочница NAT (lxcbr0 - 10.0.3.x)</span>
-                            <p class="text-[11px] text-slate-400">Полигон за файрволом, не занимает адреса в домашнем роутере.</p>
+                            <p class="text-[11px] text-slate-400">Полигон за файрволом с авто-пробросом в Caddy.</p>
                         </div>
                     </label>
                 </div>
@@ -1168,6 +1729,24 @@ INDEX_HTML = """<!DOCTYPE html>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Статический IPv4 для NAT (lxcbr0)</label>
                     <input type="text" id="new-ip" placeholder="10.0.3.10" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
                 </div>
+
+                <!-- Collapsible Pre-seed / Cloud-Init -->
+                <details class="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-xs">
+                    <summary class="font-semibold text-slate-300 cursor-pointer flex items-center justify-between">
+                        <span>🔑 Автонастройка (SSH-ключ и Start-скрипт)</span>
+                        <span class="text-slate-500 text-[10px]">нажмите для открытия</span>
+                    </summary>
+                    <div class="space-y-3 pt-3">
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-1">SSH Public Key (для беспарольного входа)</label>
+                            <input type="text" id="new-ssh-key" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5..." class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-[11px] font-mono text-slate-200">
+                        </div>
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-1">Post-install скрипт (выполнится при первом старте)</label>
+                            <textarea id="new-init-script" rows="2" placeholder="apt update && apt install -y curl htop" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-[11px] font-mono text-slate-200"></textarea>
+                        </div>
+                    </div>
+                </details>
 
                 <div class="space-y-2 pt-2 border-t border-slate-800">
                     <label class="flex items-center gap-2 cursor-pointer">
@@ -1185,7 +1764,6 @@ INDEX_HTML = """<!DOCTYPE html>
                         <svg class="animate-spin w-4 h-4 text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                         <span id="create-progress-text">Развертывание контейнера...</span>
                     </div>
-                    <p class="text-[11px] text-slate-400">Для кэшированных образов развертывание занимает ~1-2 сек. При первом скачивании из сети (Kali, Ubuntu) может потребоваться 1-2 минуты.</p>
                 </div>
 
                 <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800 shrink-0">
@@ -1196,20 +1774,231 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Templates Catalog Modal (Dynamic Live Internet Catalog) -->
+    <!-- Cgroup v2 Limits Modal -->
+    <div id="limits-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-4 sm:p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">🎛️</span>
+                    <h3 class="font-bold text-white text-sm sm:text-base">
+                        Лимиты cgroup v2: <span id="limits-target-name" class="text-brand-400 font-mono">name</span>
+                    </h3>
+                </div>
+                <button onclick="closeLimitsModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <form onsubmit="handleSaveLimits(event)" class="space-y-4 text-xs">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Лимит оперативной памяти (RAM Limit)</label>
+                    <div class="flex items-center gap-2">
+                        <input type="number" id="limits-mem-input" min="0" max="65536" placeholder="0" class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+                        <span class="text-slate-400 font-mono">MB</span>
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-1">0 = без лимита. Применяется на лету без перезагрузки!</p>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Квота процессора (CPU Quota)</label>
+                    <div class="flex items-center gap-2">
+                        <input type="number" id="limits-cpu-input" min="0" max="800" placeholder="0" class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+                        <span class="text-slate-400 font-mono">%</span>
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-1">100 = 1 ядро, 50 = половина ядра, 0 = без ограничений.</p>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeLimitsModal()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-xs transition">Сохранить лимиты</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 1-Click Caddy Ingress Modal -->
+    <div id="ingress-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">🌐</span>
+                    <h3 class="font-bold text-white text-sm sm:text-base">
+                        Caddy Ingress: <span id="ingress-target-name" class="text-brand-400 font-mono">name</span>
+                    </h3>
+                </div>
+                <button onclick="closeIngressModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <!-- New Route Form -->
+            <form onsubmit="handleCreateRoute(event)" class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2.5 shrink-0 text-xs">
+                <span class="font-semibold text-slate-200 block">Опубликовать новый порт:</span>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-1">Желаемый поддомен</label>
+                        <div class="flex items-center gap-1">
+                            <input type="text" id="route-subdomain-input" required placeholder="my-app" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white font-mono">
+                            <span class="text-slate-500 font-mono text-[11px]" id="route-domain-suffix">.uwu</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-[11px] text-slate-400 mb-1">Внутренний порт контейнера</label>
+                        <input type="number" id="route-port-input" required min="1" max="65535" placeholder="например: 80, 3000, 8080" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white font-mono">
+                    </div>
+                </div>
+                <div class="flex items-center justify-between pt-1">
+                    <label class="flex items-center gap-2 cursor-pointer text-slate-300">
+                        <input type="checkbox" id="route-auth-check" checked class="rounded bg-slate-900 border-slate-700 text-brand-600 focus:ring-0">
+                        <span>Защитить базовой авторизацией (homelab_auth)</span>
+                    </label>
+                    <button type="submit" id="btn-route-add" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded text-xs transition">+ Опубликовать</button>
+                </div>
+            </form>
+
+            <!-- Published Routes List -->
+            <div class="flex-1 overflow-y-auto space-y-2 min-h-[140px] pr-1" id="ingress-routes-list">
+                <div class="text-center py-6 text-slate-500 text-xs">Загрузка маршрутов...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inline Rootfs File Explorer Modal -->
+    <div id="files-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-5xl h-[88vh] shadow-2xl flex flex-col overflow-hidden">
+            <!-- Modal Header -->
+            <div class="flex items-center justify-between border-b border-slate-800 px-4 py-3 bg-slate-950 shrink-0">
+                <div class="flex items-center gap-2 overflow-hidden">
+                    <span class="text-lg shrink-0">📁</span>
+                    <h3 class="font-bold text-white text-xs sm:text-sm truncate">
+                        Файлы rootfs: <span id="files-target-name" class="text-brand-400 font-mono">name</span>
+                    </h3>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="closeFilesModal()" class="text-slate-400 hover:text-white text-xl leading-none px-2">&times;</button>
+                </div>
+            </div>
+
+            <!-- Breadcrumbs Toolbar -->
+            <div class="flex items-center justify-between gap-2 px-4 py-2 bg-slate-900/90 border-b border-slate-800 text-xs shrink-0">
+                <div class="flex items-center gap-1.5 overflow-x-auto font-mono text-slate-300 py-0.5" id="files-breadcrumbs">
+                    <span class="text-slate-500">/</span>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <button onclick="navigateFilesUp()" id="btn-files-up" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs">⬆ Вверх</button>
+                </div>
+            </div>
+
+            <!-- Explorer & Editor Area -->
+            <div class="flex-1 flex overflow-hidden">
+                <!-- Directory Listing Table -->
+                <div id="files-table-container" class="flex-1 overflow-y-auto">
+                    <table class="w-full text-left border-collapse text-xs">
+                        <thead>
+                            <tr class="bg-slate-950/40 text-slate-400 border-b border-slate-800 sticky top-0 backdrop-blur">
+                                <th class="py-2.5 px-4">Имя</th>
+                                <th class="py-2.5 px-4 w-24">Размер</th>
+                                <th class="py-2.5 px-4 w-20">Права</th>
+                                <th class="py-2.5 px-4 text-right w-28">Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody id="files-tbody" class="divide-y divide-slate-800/60 font-mono text-slate-300">
+                            <tr><td colspan="4" class="py-8 text-center text-slate-500">Загрузка каталога...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Text Editor Pane (Hidden by default) -->
+                <div id="files-editor-container" class="hidden flex-1 flex flex-col bg-slate-950">
+                    <div class="flex items-center justify-between px-4 py-2 border-b border-slate-800 bg-slate-900 text-xs">
+                        <span id="editor-filename" class="font-mono text-brand-400 font-bold truncate">/etc/hosts</span>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button onclick="handleSaveFile()" id="btn-file-save" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-medium">💾 Сохранить</button>
+                            <button onclick="closeFileEditor()" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs">✕ Закрыть</button>
+                        </div>
+                    </div>
+                    <textarea id="file-editor-textarea" class="flex-1 w-full bg-slate-950 text-slate-100 p-4 font-mono text-xs focus:outline-none resize-none selection:bg-brand-500"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Clone Container Modal -->
+    <div id="clone-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-4 sm:p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">👥</span>
+                    <h3 class="font-bold text-white text-sm sm:text-base">
+                        Клонировать: <span id="clone-src-name" class="text-brand-400 font-mono">name</span>
+                    </h3>
+                </div>
+                <button onclick="closeCloneModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <form onsubmit="handleCloneSubmit(event)" class="space-y-4 text-xs">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Имя нового клона</label>
+                    <input type="text" id="clone-new-name" required placeholder="например: dev-node-clone" oninput="this.value = this.value.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+                    <p class="text-[11px] text-slate-500 mt-1">Через lxc-copy будет создан точный дубликат с новым MAC и IP.</p>
+                </div>
+
+                <label class="flex items-center gap-2 cursor-pointer pt-1">
+                    <input type="checkbox" id="clone-startnow" checked class="rounded bg-slate-950 border-slate-700 text-brand-600 focus:ring-0">
+                    <span class="text-xs text-slate-300">Запустить клон сразу после создания</span>
+                </label>
+
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeCloneModal()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
+                    <button type="submit" id="btn-clone-submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg text-xs transition">Клонировать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Import Container Modal -->
+    <div id="import-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-4 sm:p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">📤</span>
+                    <h3 class="font-bold text-white text-sm sm:text-base">Импорт контейнера из архива</h3>
+                </div>
+                <button onclick="closeImportModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <form onsubmit="handleImportSubmit(event)" class="space-y-4 text-xs">
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Имя контейнера</label>
+                    <input type="text" id="import-name" required placeholder="например: restored-node" oninput="this.value = this.value.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-medium text-slate-300 mb-1">Файл архива (.tar.gz)</label>
+                    <input type="file" id="import-file" required accept=".tar.gz,.tgz" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-300 text-xs">
+                </div>
+
+                <div id="import-progress" class="hidden p-3 bg-brand-950/40 border border-brand-500/30 rounded-xl space-y-1">
+                    <span class="text-blue-300 text-xs font-medium">Распаковка и регистрация контейнера...</span>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeImportModal()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
+                    <button type="submit" id="btn-import-submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg text-xs transition">Импортировать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Templates Catalog Modal -->
     <div id="templates-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full p-4 sm:p-6 shadow-2xl space-y-3.5 max-h-[92vh] flex flex-col">
-            <!-- Modal Header -->
             <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
                 <div class="flex items-center gap-2">
                     <span class="text-xl">📥</span>
                     <div>
                         <h3 class="font-bold text-white text-sm sm:text-base">Каталог Шаблонов ОС (LinuxContainers)</h3>
-                        <p class="text-[11px] text-slate-400 hidden sm:block">Прямая синхронизация с images.linuxcontainers.org</p>
+                        <p class="text-[11px] text-slate-400 hidden sm:block">Синхронизация с images.linuxcontainers.org</p>
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
-                    <button onclick="refreshUpstreamCatalog()" id="btn-catalog-refresh" class="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs transition active:scale-95" title="Синхронизировать с интернетом">
+                    <button onclick="refreshUpstreamCatalog()" id="btn-catalog-refresh" class="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs transition active:scale-95" title="Синхронизировать">
                         <span id="cat-refresh-icon">🔄</span>
                         <span class="hidden sm:inline">Обновить из сети</span>
                     </button>
@@ -1217,7 +2006,6 @@ INDEX_HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Search and Filter Bar -->
             <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
                 <div class="relative flex-1">
                     <input type="text" id="template-search" oninput="filterTemplatesCatalog()" placeholder="🔍 Поиск дистрибутива (например: kali, debian, alpine, arch, rocky)..." class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs font-mono">
@@ -1229,7 +2017,6 @@ INDEX_HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Active Background Download Progress Banner -->
             <div id="template-dl-banner" class="hidden p-3 bg-blue-950/40 border border-blue-500/30 rounded-xl space-y-1 shrink-0">
                 <div class="flex items-center justify-between text-xs">
                     <span id="template-dl-text" class="text-blue-300 font-medium flex items-center gap-2">
@@ -1238,15 +2025,11 @@ INDEX_HTML = """<!DOCTYPE html>
                     </span>
                     <span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 font-mono">В процессе</span>
                 </div>
-                <p class="text-[11px] text-slate-400">Фоновая загрузка образа в /var/cache/lxc. Окно можно закрывать, загрузка продолжится.</p>
             </div>
 
-            <!-- Distros List (Scrollable) -->
             <div class="space-y-3 overflow-y-auto flex-1 pr-1" id="templates-list-container">
-                <div class="text-center py-8 text-slate-500 text-xs">Загрузка каталога из интернета...</div>
             </div>
 
-            <!-- Modal Footer -->
             <div class="flex items-center justify-between pt-3 border-t border-slate-800 text-xs text-slate-500 shrink-0">
                 <span class="truncate">Кэш: <code class="text-slate-400 font-mono text-[11px]">/var/cache/lxc/download</code></span>
                 <button type="button" onclick="closeTemplatesModal()" class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Закрыть</button>
@@ -1254,7 +2037,7 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Snapshot Management Modal -->
+    <!-- Snapshot Modal -->
     <div id="snapshot-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
         <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
             <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
@@ -1267,20 +2050,17 @@ INDEX_HTML = """<!DOCTYPE html>
                 <button onclick="closeSnapshotModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
             </div>
 
-            <!-- Create Snapshot Form -->
             <form onsubmit="handleCreateSnapshot(event)" class="flex flex-col sm:flex-row gap-2 shrink-0">
                 <input type="text" id="snap-comment-input" placeholder="Комментарий к снимку..." class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs">
                 <button type="submit" id="btn-snap-create" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-xs whitespace-nowrap transition active:scale-95">+ Сделать снимок</button>
             </form>
 
-            <!-- Snapshots List -->
             <div class="flex-1 overflow-y-auto space-y-2 min-h-[160px] pr-1" id="snapshots-list">
-                <div class="text-center py-8 text-slate-500 text-xs">Загрузка снимков...</div>
             </div>
         </div>
     </div>
 
-    <!-- Full Interactive Terminal Modal (ttyd) with Fullscreen Mode -->
+    <!-- Web Terminal Modal (ttyd) -->
     <div id="term-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 hidden">
         <div id="term-container" class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-5xl h-[85vh] shadow-2xl flex flex-col overflow-hidden transition-all duration-300">
             <div class="flex items-center justify-between border-b border-slate-800 px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 shrink-0">
@@ -1316,7 +2096,6 @@ INDEX_HTML = """<!DOCTYPE html>
                         <h3 class="font-bold text-white text-sm sm:text-base flex items-center gap-2">
                             Команды: <span id="exec-target-name" class="text-brand-400 font-mono">name</span>
                         </h3>
-                        <p class="text-[11px] text-slate-400 hidden sm:block">Выполнение команд через lxc-attach с захватом вывода</p>
                     </div>
                 </div>
                 <button onclick="closeExecModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
@@ -1354,10 +2133,17 @@ INDEX_HTML = """<!DOCTYPE html>
         let activeExecTarget = '';
         let activeSnapshotTarget = '';
         let activeTermTarget = '';
+        let activeLimitsTarget = '';
+        let activeIngressTarget = '';
+        let activeFilesTarget = '';
+        let activeCloneTarget = '';
+        let currentFsPath = '/';
+        let currentEditingFile = '';
         let isTermFullscreen = false;
         let catalogData = {};
         let cachedImagesList = [];
         let templatePollTimer = null;
+        let hostBaseDomain = 'uwu';
 
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
@@ -1513,14 +2299,11 @@ INDEX_HTML = """<!DOCTYPE html>
             let matchedDistros = 0;
 
             for (const [distKey, dist] of Object.entries(catalogData)) {
-                // Filter logic: matches distro key, distro name, or any release name
                 const keyMatch = distKey.toLowerCase().includes(query);
                 const nameMatch = (dist.name || '').toLowerCase().includes(query);
                 const releaseMatch = (dist.releases || []).some(r => (r.id + ' ' + (r.name || '')).toLowerCase().includes(query));
 
-                if (query && !keyMatch && !nameMatch && !releaseMatch) {
-                    continue;
-                }
+                if (query && !keyMatch && !nameMatch && !releaseMatch) continue;
 
                 matchedDistros++;
                 const icon = dist.icon || '📦';
@@ -1561,7 +2344,6 @@ INDEX_HTML = """<!DOCTYPE html>
                     <div class="text-center py-12 text-slate-500">
                         <div class="text-3xl mb-2">🔍</div>
                         <div class="text-slate-300 font-medium">Ничего не найдено по запросу "${escapeHtml(query)}"</div>
-                        <div class="text-xs text-slate-500 mt-1">Попробуйте ввести 'kali', 'debian', 'alpine' или 'ubuntu'</div>
                     </div>`;
             }
 
@@ -1618,9 +2400,7 @@ INDEX_HTML = """<!DOCTYPE html>
                 if (d.status === 'running') {
                     if (banner) banner.classList.remove('hidden');
                     if (text) text.innerHTML = `<svg class="animate-spin w-4 h-4 text-blue-400 inline mr-2 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>${escapeHtml(d.message)}`;
-                    if (!templatePollTimer) {
-                        templatePollTimer = setInterval(pollTemplateStatus, 2000);
-                    }
+                    if (!templatePollTimer) templatePollTimer = setInterval(pollTemplateStatus, 2000);
                 } else {
                     if (banner) banner.classList.add('hidden');
                     if (templatePollTimer) {
@@ -1653,6 +2433,10 @@ INDEX_HTML = """<!DOCTYPE html>
                 const res = await fetch('/api/status');
                 if (!res.ok) return;
                 const d = await res.json();
+                hostBaseDomain = d.base_domain || 'uwu';
+                const suffix = document.getElementById('route-domain-suffix');
+                if (suffix) suffix.innerText = `.${hostBaseDomain}`;
+
                 document.getElementById('stat-load').innerText = d.load.join(', ');
                 document.getElementById('stat-ram-text').innerText = `${d.ram.used_mb} / ${d.ram.total_mb} MB`;
                 document.getElementById('stat-ram-pct').innerText = `${d.ram.percent}%`;
@@ -1696,7 +2480,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <div class="text-slate-300 font-medium">Нет созданных Sandbox контейнеров</div>
                         <div class="text-xs text-slate-500 mt-1">Нажмите «Создать Sandbox» для запуска тестового окружения</div>
                     </div>`;
-                if (tbody) tbody.innerHTML = `<tr><td colspan="7">${emptyHtml}</td></tr>`;
+                if (tbody) tbody.innerHTML = `<tr><td colspan="8">${emptyHtml}</td></tr>`;
                 if (cardsContainer) cardsContainer.innerHTML = emptyHtml;
                 return;
             }
@@ -1715,46 +2499,59 @@ INDEX_HTML = """<!DOCTYPE html>
                     '<span class="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded font-mono">LAN (br0)</span>' :
                     '<span class="text-[10px] bg-purple-500/20 text-purple-400 border border-purple-500/30 px-1.5 py-0.5 rounded font-mono">NAT (lxcbr0)</span>';
 
+                const limitsBadge = `<span class="text-[11px] font-mono text-slate-300">RAM: ${escapeHtml(c.mem_limit)}</span>`;
+                const ingressBadge = c.routes_count > 0 ? 
+                    `<button onclick="openIngressModal('${escapeHtml(c.name)}')" class="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">${c.routes_count} домен(ов)</button>` :
+                    `<button onclick="openIngressModal('${escapeHtml(c.name)}')" class="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700">+ Ingress</button>`;
+
                 // Desktop Table Row
                 tableHtml += `
                     <tr class="hover:bg-slate-850/50 transition">
-                        <td class="py-3 px-6 font-semibold text-white flex items-center gap-2">
+                        <td class="py-3 px-5 font-semibold text-white flex items-center gap-2">
                             <span class="text-base">📦</span>
                             <span class="font-mono">${escapeHtml(c.name)}</span>
                         </td>
-                        <td class="py-3 px-6">
+                        <td class="py-3 px-4">
                             <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${badgeColor}">
-                                <span class="w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-emerald-400 pulse-dot' : isFrozen ? 'bg-cyan-400' : 'bg-slate-500'}"></span>
+                                <span class="w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-emerald-400 pulse-dot' : 'bg-slate-500'}"></span>
                                 ${c.state}
                             </span>
                         </td>
-                        <td class="py-3 px-6">
+                        <td class="py-3 px-5">
                             <div class="flex items-center gap-2">
                                 <span class="font-mono text-slate-300 text-xs">${c.ip !== '-' ? escapeHtml(c.ip) : '<span class="text-slate-600">--</span>'}</span>
                                 ${netModeBadge}
                             </div>
                         </td>
-                        <td class="py-3 px-6 font-mono text-slate-300 text-xs">${c.memory !== '-' ? escapeHtml(c.memory) : '<span class="text-slate-600">--</span>'}</td>
-                        <td class="py-3 px-6 font-mono text-slate-400 text-xs">${c.cpu !== '-' ? escapeHtml(c.cpu) : '<span class="text-slate-600">--</span>'}</td>
-                        <td class="py-3 px-6">
-                            <button onclick="toggleAutostart('${escapeHtml(c.name)}')" class="text-xs px-2 py-0.5 rounded border transition ${c.autostart ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}" title="Нажмите для переключения">
+                        <td class="py-3 px-4 font-mono text-slate-300 text-xs">${c.memory !== '-' ? escapeHtml(c.memory) : '<span class="text-slate-600">--</span>'}</td>
+                        <td class="py-3 px-4 font-mono text-xs">
+                            <button onclick="openLimitsModal('${escapeHtml(c.name)}')" class="hover:underline flex items-center gap-1 text-slate-300" title="Нажмите для настройки cgroup лимитов">
+                                <span>⚙️</span> ${limitsBadge}
+                            </button>
+                        </td>
+                        <td class="py-3 px-4">${ingressBadge}</td>
+                        <td class="py-3 px-4">
+                            <button onclick="toggleAutostart('${escapeHtml(c.name)}')" class="text-xs px-2 py-0.5 rounded border transition ${c.autostart ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}" title="Переключить">
                                 ${c.autostart ? 'Да' : 'Нет'}
                             </button>
                         </td>
-                        <td class="py-3 px-6 text-right space-x-1 whitespace-nowrap">
+                        <td class="py-3 px-5 text-right space-x-1 whitespace-nowrap">
                             ${isRunning ? `
-                                <button onclick="openTermModal('${escapeHtml(c.name)}')" class="px-2.5 py-1 bg-emerald-950/50 hover:bg-emerald-900/80 text-emerald-300 rounded text-xs border border-emerald-800/50 transition font-medium" title="Интерактивный шелл">📟 Терминал</button>
-                                <button onclick="openExecModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Быстрый запуск команд">💻 Exec</button>
-                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-indigo-950/50 hover:bg-indigo-900/80 text-indigo-300 rounded text-xs border border-indigo-800/50 transition" title="Снимки">📸 Снимки</button>
+                                <button onclick="openTermModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-emerald-950/50 hover:bg-emerald-900/80 text-emerald-300 rounded text-xs border border-emerald-800/50 transition font-medium" title="Интерактивный шелл">📟</button>
+                                <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Файлы rootfs">📁</button>
+                                <button onclick="openExecModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Быстрый Exec">💻</button>
+                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-indigo-950/50 hover:bg-indigo-900/80 text-indigo-300 rounded text-xs border border-indigo-800/50 transition" title="Снимки">📸</button>
+                                <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs border border-slate-700 transition" title="Клонировать">👥</button>
+                                <button onclick="exportContainer('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded text-xs border border-slate-700 transition" title="Экспорт бэкапа">📦</button>
                                 <button onclick="handleAction('${escapeHtml(c.name)}', 'restart')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded text-xs border border-slate-700 transition" title="Перезагрузить">🔄</button>
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="px-2.5 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded text-xs border border-rose-800/40 transition" title="Остановить">⏹️ Стоп</button>
-                            ` : isFrozen ? `
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'unfreeze')" class="px-2.5 py-1 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 rounded text-xs border border-cyan-800/40 transition" title="Разморозить">☀️ Разморозить</button>
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="px-2.5 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded text-xs border border-rose-800/40 transition" title="Остановить">⏹️ Стоп</button>
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded text-xs border border-rose-800/40 transition" title="Остановить">⏹️</button>
                             ` : `
-                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="px-2.5 py-1 bg-indigo-950/50 hover:bg-indigo-900/80 text-indigo-300 rounded text-xs border border-indigo-800/50 transition" title="Снимки">📸 Снимки</button>
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'start')" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-medium transition" title="Запустить">▶ Старт</button>
-                                <button onclick="confirmDestroy('${escapeHtml(c.name)}')" class="px-2.5 py-1 bg-rose-950/30 hover:bg-rose-900/60 text-rose-400 rounded text-xs border border-rose-900/40 transition" title="Удалить">🗑️</button>
+                                <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Файлы rootfs">📁</button>
+                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-indigo-950/50 hover:bg-indigo-900/80 text-indigo-300 rounded text-xs border border-indigo-800/50 transition" title="Снимки">📸</button>
+                                <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs border border-slate-700 transition" title="Клонировать">👥</button>
+                                <button onclick="exportContainer('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded text-xs border border-slate-700 transition" title="Экспорт бэкапа">📦</button>
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'start')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-medium transition" title="Запустить">▶ Старт</button>
+                                <button onclick="confirmDestroy('${escapeHtml(c.name)}')" class="px-2 py-1 bg-rose-950/30 hover:bg-rose-900/60 text-rose-400 rounded text-xs border border-rose-900/40 transition" title="Удалить">🗑️</button>
                             `}
                         </td>
                     </tr>`;
@@ -1788,25 +2585,29 @@ INDEX_HTML = """<!DOCTYPE html>
                                 <span class="font-mono text-slate-200 text-xs">${c.memory !== '-' ? escapeHtml(c.memory) : '<span class="text-slate-600">--</span>'}</span>
                             </div>
                             <div>
-                                <span class="text-slate-500 text-[10px] block">АВТОСТАРТ</span>
-                                <button onclick="toggleAutostart('${escapeHtml(c.name)}')" class="text-[11px] px-2 py-0.5 rounded border transition ${c.autostart ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}">
-                                    ${c.autostart ? 'Включен' : 'Выключен'}
-                                </button>
+                                <span class="text-slate-500 text-[10px] block">ЛИМИТ RAM</span>
+                                <button onclick="openLimitsModal('${escapeHtml(c.name)}')" class="font-mono text-brand-400 text-xs hover:underline">${escapeHtml(c.mem_limit)}</button>
                             </div>
                         </div>
 
                         <!-- Card Action Buttons Grid -->
-                        <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1">
+                        <div class="grid grid-cols-3 sm:grid-cols-4 gap-1.5 pt-1">
                             ${isRunning ? `
-                                <button onclick="openTermModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 rounded-lg text-xs border border-emerald-800/50 font-medium active:scale-95">📟 Терминал</button>
-                                <button onclick="openExecModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700 active:scale-95">💻 Exec</button>
-                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 rounded-lg text-xs border border-indigo-800/50 active:scale-95">📸 Снимки</button>
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'restart')" class="flex items-center justify-center gap-1 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg text-xs border border-slate-700 active:scale-95">🔄 Рестарт</button>
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="flex items-center justify-center gap-1 py-2 bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 rounded-lg text-xs border border-rose-800/40 active:scale-95">⏹️ Стоп</button>
+                                <button onclick="openTermModal('${escapeHtml(c.name)}')" class="py-2 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 rounded-lg text-xs border border-emerald-800/50 font-medium active:scale-95">📟 Шелл</button>
+                                <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700 active:scale-95">📁 Файлы</button>
+                                <button onclick="openIngressModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-blue-300 rounded-lg text-xs border border-slate-700 active:scale-95">🌐 Ingress</button>
+                                <button onclick="openLimitsModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 rounded-lg text-xs border border-slate-700 active:scale-95">⚙️ Лимиты</button>
+                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 rounded-lg text-xs border border-slate-700 active:scale-95">📸 Снимки</button>
+                                <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-xs border border-slate-700 active:scale-95">👥 Клон</button>
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'restart')" class="py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg text-xs border border-slate-700 active:scale-95">🔄 Рестарт</button>
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="py-2 bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 rounded-lg text-xs border border-rose-800/40 active:scale-95">⏹️ Стоп</button>
                             ` : `
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'start')" class="flex items-center justify-center gap-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium active:scale-95">▶ Старт</button>
-                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 rounded-lg text-xs border border-indigo-800/50 active:scale-95">📸 Снимки</button>
-                                <button onclick="confirmDestroy('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 rounded-lg text-xs border border-rose-900/40 active:scale-95">🗑️ Удалить</button>
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'start')" class="py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium active:scale-95">▶ Старт</button>
+                                <button onclick="openFilesModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700 active:scale-95">📁 Файлы</button>
+                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-purple-300 rounded-lg text-xs border border-slate-700 active:scale-95">📸 Снимки</button>
+                                <button onclick="openCloneModal('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-xs border border-slate-700 active:scale-95">👥 Клон</button>
+                                <button onclick="exportContainer('${escapeHtml(c.name)}')" class="py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg text-xs border border-slate-700 active:scale-95">📦 Бэкап</button>
+                                <button onclick="confirmDestroy('${escapeHtml(c.name)}')" class="py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 rounded-lg text-xs border border-rose-900/40 active:scale-95">🗑️ Удалить</button>
                             `}
                         </div>
                     </div>`;
@@ -1840,11 +2641,12 @@ INDEX_HTML = """<!DOCTYPE html>
         }
 
         function confirmDestroy(name) {
-            if (confirm(`Вы уверены, что хотите удалить контейнер '${name}' и стереть его диск?`)) {
+            if (confirm(`Вы уверены, что хотите удалить контейнер '${name}', его диск и все опубликованные Ingress-маршруты?`)) {
                 handleAction(name, 'destroy');
             }
         }
 
+        // --- Creation Modal ---
         function openCreateModal() {
             document.getElementById('create-modal').classList.remove('hidden');
             document.getElementById('new-name').focus();
@@ -1865,7 +2667,6 @@ INDEX_HTML = """<!DOCTYPE html>
             const btnSubmit = document.getElementById('btn-create-submit');
             const btnCancel = document.getElementById('btn-create-cancel');
             const progress = document.getElementById('create-progress');
-            const progressText = document.getElementById('create-progress-text');
 
             const rawName = document.getElementById('new-name').value.trim();
             const cleanName = rawName.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase();
@@ -1885,17 +2686,18 @@ INDEX_HTML = """<!DOCTYPE html>
                 net_mode: netMode,
                 ip: document.getElementById('new-ip').value.trim(),
                 autostart: document.getElementById('new-autostart').checked,
-                start_now: document.getElementById('new-startnow').checked
+                start_now: document.getElementById('new-startnow').checked,
+                memory_mb: parseInt(document.getElementById('new-mem-mb').value || '0', 10),
+                cpu_quota: parseInt(document.getElementById('new-cpu-quota').value || '0', 10),
+                ssh_key: document.getElementById('new-ssh-key').value.trim(),
+                init_script: document.getElementById('new-init-script').value.trim()
             };
 
             btnSubmit.disabled = true;
             if (btnCancel) btnCancel.disabled = true;
             btnSubmit.classList.add('opacity-50');
             btnSubmit.innerText = 'Развертывание...';
-            if (progress) {
-                progress.classList.remove('hidden');
-                if (progressText) progressText.innerText = `Развертывание '${cleanName}' (${distro} ${release})...`;
-            }
+            if (progress) progress.classList.remove('hidden');
 
             try {
                 const res = await fetch('/api/containers/create', {
@@ -1903,14 +2705,9 @@ INDEX_HTML = """<!DOCTYPE html>
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(payload)
                 });
-                let d;
-                try {
-                    d = await res.json();
-                } catch (jsonErr) {
-                    throw new Error(`Ошибка ответа сервера (HTTP ${res.status})`);
-                }
+                const d = await res.json();
                 if (d.success) {
-                    showToast(d.message || `Контейнер '${cleanName}' успешно создан!`, d.warning ? 'info' : 'success');
+                    showToast(d.message || `Контейнер '${cleanName}' успешно создан!`, 'success');
                     closeCreateModal();
                     document.getElementById('create-form').reset();
                     fetchCatalog();
@@ -1929,7 +2726,401 @@ INDEX_HTML = """<!DOCTYPE html>
             }
         }
 
-        // --- Terminal Modal (ttyd) with Fullscreen Mode ---
+        // --- Limits Modal ---
+        async function openLimitsModal(name) {
+            activeLimitsTarget = name;
+            document.getElementById('limits-target-name').innerText = name;
+            document.getElementById('limits-modal').classList.remove('hidden');
+
+            try {
+                const res = await fetch(`/api/containers/${name}/limits`);
+                const d = await res.json();
+                if (d.success) {
+                    document.getElementById('limits-mem-input').value = d.memory_mb || '';
+                    document.getElementById('limits-cpu-input').value = d.cpu_quota || '';
+                }
+            } catch (e) {}
+        }
+
+        function closeLimitsModal() {
+            document.getElementById('limits-modal').classList.add('hidden');
+        }
+
+        async function handleSaveLimits(e) {
+            e.preventDefault();
+            const mem = parseInt(document.getElementById('limits-mem-input').value || '0', 10);
+            const cpu = parseInt(document.getElementById('limits-cpu-input').value || '0', 10);
+
+            try {
+                const res = await fetch(`/api/containers/${activeLimitsTarget}/limits`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ memory_mb: mem, cpu_quota: cpu })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    closeLimitsModal();
+                    refreshData();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            }
+        }
+
+        // --- Caddy Ingress Modal ---
+        async function openIngressModal(name) {
+            activeIngressTarget = name;
+            document.getElementById('ingress-target-name').innerText = name;
+            document.getElementById('ingress-modal').classList.remove('hidden');
+            document.getElementById('route-domain-suffix').innerText = `.${hostBaseDomain}`;
+            await loadIngressRoutes(name);
+        }
+
+        function closeIngressModal() {
+            document.getElementById('ingress-modal').classList.add('hidden');
+        }
+
+        async function loadIngressRoutes(name) {
+            const listEl = document.getElementById('ingress-routes-list');
+            listEl.innerHTML = '<div class="text-center py-6 text-slate-500 text-xs">Загрузка маршрутов...</div>';
+
+            try {
+                const res = await fetch(`/api/containers/${name}/routes`);
+                const d = await res.json();
+                const routes = d.routes || [];
+
+                if (routes.length === 0) {
+                    listEl.innerHTML = `
+                        <div class="text-center py-6 text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                            <div class="text-2xl mb-1">🌐</div>
+                            <div class="text-xs text-slate-400">Нет опубликованных доменов</div>
+                            <div class="text-[11px] text-slate-600 mt-1">Опубликуйте порт выше, чтобы получить HTTPS-домен в локальной сети</div>
+                        </div>`;
+                    return;
+                }
+
+                let html = '';
+                for (const r of routes) {
+                    html += `
+                        <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs gap-2">
+                            <div class="overflow-hidden">
+                                <a href="https://${escapeHtml(r.full_domain)}" target="_blank" class="font-mono font-bold text-blue-400 hover:underline flex items-center gap-1.5 truncate">
+                                    <span>🔗</span> <span>https://${escapeHtml(r.full_domain)}</span>
+                                </a>
+                                <div class="text-slate-500 text-[11px] mt-0.5 font-mono">-> контейнер порт ${escapeHtml(r.port)} ${r.auth ? '(🔒 Basic Auth)' : '(Открытый)'}</div>
+                            </div>
+                            <button onclick="handleDeleteRoute('${escapeHtml(r.subdomain)}')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded border border-rose-800/40 text-[11px] transition active:scale-95 shrink-0">🗑️</button>
+                        </div>`;
+                }
+                listEl.innerHTML = html;
+            } catch (err) {
+                listEl.innerHTML = `<div class="text-rose-400 text-xs">Ошибка: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        async function handleCreateRoute(e) {
+            e.preventDefault();
+            const subdomain = document.getElementById('route-subdomain-input').value.trim();
+            const port = document.getElementById('route-port-input').value.trim();
+            const auth = document.getElementById('route-auth-check').checked;
+
+            try {
+                const res = await fetch(`/api/containers/${activeIngressTarget}/routes`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ subdomain, port, auth })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    document.getElementById('route-subdomain-input').value = '';
+                    document.getElementById('route-port-input').value = '';
+                    await loadIngressRoutes(activeIngressTarget);
+                    refreshData();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            }
+        }
+
+        async function handleDeleteRoute(subdomain) {
+            if (!confirm(`Удалить маршрут для поддомена '${subdomain}'?`)) return;
+            try {
+                const res = await fetch(`/api/containers/${activeIngressTarget}/routes/${subdomain}`, { method: 'DELETE' });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    await loadIngressRoutes(activeIngressTarget);
+                    refreshData();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            }
+        }
+
+        // --- File Explorer & Editor Modal ---
+        async function openFilesModal(name) {
+            activeFilesTarget = name;
+            currentFsPath = '/';
+            document.getElementById('files-target-name').innerText = name;
+            closeFileEditor();
+            document.getElementById('files-modal').classList.remove('hidden');
+            await loadFsDirectory(currentFsPath);
+        }
+
+        function closeFilesModal() {
+            document.getElementById('files-modal').classList.add('hidden');
+            closeFileEditor();
+        }
+
+        async function loadFsDirectory(path) {
+            currentFsPath = path;
+            renderBreadcrumbs(path);
+            const tbody = document.getElementById('files-tbody');
+            tbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-slate-500">Загрузка каталога...</td></tr>';
+
+            try {
+                const res = await fetch(`/api/containers/${activeFilesTarget}/fs/list?path=${encodeURIComponent(path)}`);
+                const d = await res.json();
+                if (!d.success) {
+                    tbody.innerHTML = `<tr><td colspan="4" class="py-8 text-center text-rose-400">${escapeHtml(d.error)}</td></tr>`;
+                    return;
+                }
+
+                const items = d.items || [];
+                if (items.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-slate-500">Каталог пуст</td></tr>';
+                    return;
+                }
+
+                let html = '';
+                for (const item of items) {
+                    const itemPath = (currentFsPath.endsWith('/') ? currentFsPath : currentFsPath + '/') + item.name;
+                    const sizeStr = item.is_dir ? '-' : formatBytes(item.size);
+                    const icon = item.is_dir ? '📁' : '📄';
+
+                    html += `
+                        <tr class="hover:bg-slate-800/40 transition">
+                            <td class="py-2 px-4 flex items-center gap-2 overflow-hidden">
+                                <span>${icon}</span>
+                                ${item.is_dir ? `
+                                    <button onclick="loadFsDirectory('${escapeHtml(itemPath)}')" class="text-blue-400 hover:underline font-bold truncate text-left">${escapeHtml(item.name)}</button>
+                                ` : `
+                                    <span class="truncate text-slate-200">${escapeHtml(item.name)}</span>
+                                `}
+                            </td>
+                            <td class="py-2 px-4 text-slate-500 text-[11px]">${sizeStr}</td>
+                            <td class="py-2 px-4 text-slate-500 text-[11px]">${escapeHtml(item.mode)}</td>
+                            <td class="py-2 px-4 text-right space-x-1 whitespace-nowrap">
+                                ${!item.is_dir ? `
+                                    <button onclick="openFileEditor('${escapeHtml(itemPath)}')" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px]" title="Редактировать">✏️</button>
+                                    <a href="/api/containers/${encodeURIComponent(activeFilesTarget)}/fs/download?path=${encodeURIComponent(itemPath)}" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] inline-block" title="Скачать">📥</a>
+                                ` : ''}
+                            </td>
+                        </tr>`;
+                }
+                tbody.innerHTML = html;
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="4" class="py-8 text-center text-rose-400">Ошибка: ${escapeHtml(err.message)}</td></tr>`;
+            }
+        }
+
+        function renderBreadcrumbs(path) {
+            const container = document.getElementById('files-breadcrumbs');
+            const parts = path.split('/').filter(Boolean);
+            let html = '<button onclick="loadFsDirectory(\'/\')" class="text-slate-400 hover:text-white">/</button>';
+            let accum = '';
+            for (const p of parts) {
+                accum += '/' + p;
+                html += ` <span class="text-slate-600">/</span> <button onclick="loadFsDirectory('${escapeHtml(accum)}')" class="text-slate-300 hover:text-white">${escapeHtml(p)}</button>`;
+            }
+            container.innerHTML = html;
+        }
+
+        function navigateFilesUp() {
+            if (currentFsPath === '/' || !currentFsPath) return;
+            const parent = currentFsPath.substring(0, currentFsPath.lastIndexOf('/')) || '/';
+            loadFsDirectory(parent);
+        }
+
+        async function openFileEditor(path) {
+            currentEditingFile = path;
+            document.getElementById('editor-filename').innerText = path;
+            const area = document.getElementById('file-editor-textarea');
+            area.value = 'Загрузка содержимого файла...';
+
+            document.getElementById('files-table-container').classList.add('hidden');
+            document.getElementById('files-editor-container').classList.remove('hidden');
+
+            try {
+                const res = await fetch(`/api/containers/${activeFilesTarget}/fs/read?path=${encodeURIComponent(path)}`);
+                const d = await res.json();
+                if (d.success) {
+                    area.value = d.content || '';
+                } else {
+                    area.value = `Ошибка: ${d.error}`;
+                }
+            } catch (e) {
+                area.value = `Ошибка сети: ${e.message}`;
+            }
+        }
+
+        function closeFileEditor() {
+            document.getElementById('files-editor-container').classList.add('hidden');
+            document.getElementById('files-table-container').classList.remove('hidden');
+            currentEditingFile = '';
+        }
+
+        async function handleSaveFile() {
+            if (!currentEditingFile) return;
+            const content = document.getElementById('file-editor-textarea').value;
+            const btn = document.getElementById('btn-file-save');
+            btn.disabled = true;
+            btn.innerText = 'Сохранение...';
+
+            try {
+                const res = await fetch(`/api/containers/${activeFilesTarget}/fs/write`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ path: currentEditingFile, content })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '💾 Сохранить';
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // --- Clone Modal ---
+        function openCloneModal(name) {
+            activeCloneTarget = name;
+            document.getElementById('clone-src-name').innerText = name;
+            document.getElementById('clone-new-name').value = `${name}-clone`;
+            document.getElementById('clone-modal').classList.remove('hidden');
+        }
+
+        function closeCloneModal() {
+            document.getElementById('clone-modal').classList.add('hidden');
+        }
+
+        async function handleCloneSubmit(e) {
+            e.preventDefault();
+            const newName = document.getElementById('clone-new-name').value.trim();
+            const startNow = document.getElementById('clone-startnow').checked;
+            const btn = document.getElementById('btn-clone-submit');
+            btn.disabled = true;
+            btn.innerText = 'Клонирование...';
+
+            try {
+                const res = await fetch(`/api/containers/${activeCloneTarget}/clone`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ new_name: newName, start_now: startNow })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    closeCloneModal();
+                    refreshData();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'Клонировать';
+            }
+        }
+
+        // --- Backup Export & Import ---
+        async function exportContainer(name) {
+            showToast(`Создание резервной копии '${name}'...`, 'info');
+            try {
+                const res = await fetch(`/api/containers/${name}/export`, { method: 'POST' });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    window.location.href = d.download_url;
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка экспорта: ${err.message}`, 'error');
+            }
+        }
+
+        function openImportModal() {
+            document.getElementById('import-modal').classList.remove('hidden');
+        }
+
+        function closeImportModal() {
+            document.getElementById('import-modal').classList.add('hidden');
+            const progress = document.getElementById('import-progress');
+            if (progress) progress.classList.add('hidden');
+        }
+
+        async function handleImportSubmit(e) {
+            e.preventDefault();
+            const name = document.getElementById('import-name').value.trim();
+            const fileInput = document.getElementById('import-file');
+            if (!fileInput.files || fileInput.files.length === 0) return;
+
+            const btn = document.getElementById('btn-import-submit');
+            const progress = document.getElementById('import-progress');
+            btn.disabled = true;
+            btn.innerText = 'Импортирование...';
+            if (progress) progress.classList.remove('hidden');
+
+            const formData = new FormData();
+            formData.append('name', name);
+            formData.append('backup_file', fileInput.files[0]);
+
+            try {
+                const res = await fetch('/api/containers/import', {
+                    method: 'POST',
+                    body: formData
+                });
+                const d = await res.json();
+                if (d.success) {
+                    showToast(d.message, 'success');
+                    closeImportModal();
+                    refreshData();
+                } else {
+                    showToast(d.error, 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'Импортировать';
+                if (progress) progress.classList.add('hidden');
+            }
+        }
+
+        // --- Terminal Modal ---
         function openTermModal(name) {
             activeTermTarget = name;
             document.getElementById('term-target-name').innerText = name;
@@ -1965,7 +3156,7 @@ INDEX_HTML = """<!DOCTYPE html>
             refreshData();
         }
 
-        // --- Snapshot Modal (lxc-snapshot) ---
+        // --- Snapshot Modal ---
         async function openSnapshotModal(name) {
             activeSnapshotTarget = name;
             document.getElementById('snap-target-name').innerText = name;
@@ -1988,10 +3179,9 @@ INDEX_HTML = """<!DOCTYPE html>
 
                 if (snaps.length === 0) {
                     listEl.innerHTML = `
-                        <div class="text-center py-8 text-slate-500 border border-dashed border-slate-800 rounded-xl">
+                        <div class="text-center py-6 text-slate-500 border border-dashed border-slate-800 rounded-xl">
                             <div class="text-2xl mb-1">📸</div>
                             <div class="text-xs text-slate-400">Нет созданных снимков для '${escapeHtml(name)}'</div>
-                            <div class="text-[11px] text-slate-600 mt-1">Создайте снимок перед экспериментами для мгновенного отката</div>
                         </div>`;
                     return;
                 }
@@ -2052,9 +3242,7 @@ INDEX_HTML = """<!DOCTYPE html>
         }
 
         async function handleRestoreSnapshot(snapName) {
-            if (!confirm(`Откатить контейнер '${activeSnapshotTarget}' к состоянию '${snapName}'? Несохраненные данные будут перезаписаны.`)) {
-                return;
-            }
+            if (!confirm(`Откатить контейнер '${activeSnapshotTarget}' к снимку '${snapName}'? Несохраненные данные будут перезаписаны.`)) return;
 
             try {
                 const res = await fetch(`/api/containers/${activeSnapshotTarget}/snapshots/restore`, {
@@ -2095,7 +3283,7 @@ INDEX_HTML = """<!DOCTYPE html>
             }
         }
 
-        // --- Exec Runner Modal ---
+        // --- Quick Exec Modal ---
         function openExecModal(name) {
             activeExecTarget = name;
             document.getElementById('exec-target-name').innerText = name;
