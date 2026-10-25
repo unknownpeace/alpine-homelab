@@ -319,18 +319,19 @@ if { [ ! -f "$CONFIG_TARGET" ] || [ "${RECONFIG_MODE:-0}" = "1" ]; } && [ -t 0 ]
             fi
 
             ask_svc() {
-                local prompt="$1"
-                local prev_val="${2:-no}"
-                local def_str="y/N"
-                [ "$prev_val" = "yes" ] && def_str="Y/n"
+                local var_name="$1"
+                local prompt="$2"
+                local prev_val="${3:-yes}"
+                local def_str="Y/n"
+                [ "$prev_val" = "no" ] && def_str="y/N"
                 local ans
                 printf "   %s [%s]: " "$prompt" "$def_str"
                 read -r ans
                 case "$ans" in
-                    [yY]|[yY][eE][sS]|[дД]|[дД][аА]|1) echo "yes" ;;
-                    [nN]|[nN][oO]|[нН]|[нН][еЕ][тТ]|0) echo "no" ;;
-                    "") echo "$prev_val" ;;
-                    *) echo "$prev_val" ;;
+                    [yY]|[yY][eE][sS]|[дД]|[дД][аА]|1) eval "$var_name=yes" ;;
+                    [nN]|[nN][oO]|[нН]|[нН][еЕ][тТ]|0) eval "$var_name=no" ;;
+                    "") eval "$var_name=\"$prev_val\"" ;;
+                    *) eval "$var_name=\"$prev_val\"" ;;
                 esac
             }
 
@@ -338,16 +339,16 @@ if { [ ! -f "$CONFIG_TARGET" ] || [ "${RECONFIG_MODE:-0}" = "1" ]; } && [ -t 0 ]
                 ""|[yY]|[yY][eE][sS]|[дД]|[дД][аА])
                     echo ""
                     echo -e "   ${C_CYAN}Пошаговый выбор сервисов (Enter = значение по умолчанию):${C_RESET}"
-                    ENABLE_VAULTWARDEN=$(ask_svc "1. Установить Vaultwarden (пароли Bitwarden)?" "${PREV_ENABLE_VAULTWARDEN:-yes}")
-                    ENABLE_FORGEJO=$(ask_svc "2. Установить Forgejo (Git-сервер)?" "${PREV_ENABLE_FORGEJO:-yes}")
-                    ENABLE_CONDUIT=$(ask_svc "3. Установить Conduit (Matrix мессенджер)?" "${PREV_ENABLE_CONDUIT:-yes}")
-                    ENABLE_NAVIDROME=$(ask_svc "4. Установить Navidrome (Музыка)?" "${PREV_ENABLE_NAVIDROME:-yes}")
-                    ENABLE_TRANSMISSION=$(ask_svc "5. Установить Transmission (Торренты)?" "${PREV_ENABLE_TRANSMISSION:-yes}")
-                    ENABLE_YTDLP=$(ask_svc "6. Установить Media Downloader (yt-dlp)?" "${PREV_ENABLE_YTDLP:-yes}")
-                    ENABLE_SAMBA=$(ask_svc "7. Установить Samba / WSDD (Сетевые папки)?" "${PREV_ENABLE_SAMBA:-yes}")
-                    ENABLE_LXC_MANAGER=$(ask_svc "8. Установить LXC Sandbox (Контейнеры)?" "${PREV_ENABLE_LXC_MANAGER:-yes}")
-                    ENABLE_ADGUARD_HOME=$(ask_svc "9. Установить AdGuard Home (Блокировка рекламы)?" "${PREV_ENABLE_ADGUARD_HOME:-no}")
-                    ENABLE_TAILSCALE=$(ask_svc "10. Установить Tailscale Mesh VPN?" "${PREV_ENABLE_TAILSCALE:-no}")
+                    ask_svc ENABLE_VAULTWARDEN "1. Установить Vaultwarden (пароли Bitwarden)?" "${PREV_ENABLE_VAULTWARDEN:-yes}"
+                    ask_svc ENABLE_FORGEJO "2. Установить Forgejo (Git-сервер)?" "${PREV_ENABLE_FORGEJO:-yes}"
+                    ask_svc ENABLE_CONDUIT "3. Установить Conduit (Matrix мессенджер)?" "${PREV_ENABLE_CONDUIT:-yes}"
+                    ask_svc ENABLE_NAVIDROME "4. Установить Navidrome (Музыка)?" "${PREV_ENABLE_NAVIDROME:-yes}"
+                    ask_svc ENABLE_TRANSMISSION "5. Установить Transmission (Торренты)?" "${PREV_ENABLE_TRANSMISSION:-yes}"
+                    ask_svc ENABLE_YTDLP "6. Установить Media Downloader (yt-dlp)?" "${PREV_ENABLE_YTDLP:-yes}"
+                    ask_svc ENABLE_SAMBA "7. Установить Samba / WSDD (Сетевые папки)?" "${PREV_ENABLE_SAMBA:-yes}"
+                    ask_svc ENABLE_LXC_MANAGER "8. Установить LXC Sandbox (Контейнеры)?" "${PREV_ENABLE_LXC_MANAGER:-yes}"
+                    ask_svc ENABLE_ADGUARD_HOME "9. Установить AdGuard Home (Блокировка рекламы)?" "${PREV_ENABLE_ADGUARD_HOME:-no}"
+                    ask_svc ENABLE_TAILSCALE "10. Установить Tailscale Mesh VPN?" "${PREV_ENABLE_TAILSCALE:-no}"
                     ;;
                 all|ALL|all*|все|Все|ВСЕ)
                     ENABLE_VAULTWARDEN="yes"
