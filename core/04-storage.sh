@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 log_info "Initializing storage layout at $STORAGE_BASE..."
 
-mkdir -p "$STORAGE_BASE/music" "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete"
+mkdir -p "$STORAGE_BASE/music" "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" "$STORAGE_BASE/backups"
 addgroup -g 1000 media 2>/dev/null || true
 
 # Sanitize username to valid POSIX account (lowercase alphanumeric)

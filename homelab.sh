@@ -97,6 +97,14 @@ cmd_install() {
                 rc-service "$openrc_name" stop >/dev/null 2>&1 || true
                 rc-update del "$openrc_name" default >/dev/null 2>&1 || true
             fi
+            if [ "$openrc_name" = "lxc-manager" ] && rc-service ttyd status >/dev/null 2>&1; then
+                rc-service ttyd stop >/dev/null 2>&1 || true
+                rc-update del ttyd default >/dev/null 2>&1 || true
+            fi
+            if [ "$openrc_name" = "samba" ] && rc-service wsdd status >/dev/null 2>&1; then
+                rc-service wsdd stop >/dev/null 2>&1 || true
+                rc-update del wsdd default >/dev/null 2>&1 || true
+            fi
             [ -n "$snippet_name" ] && remove_caddy_snippet "$snippet_name"
         fi
     }
