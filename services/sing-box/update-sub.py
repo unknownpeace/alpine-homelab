@@ -121,7 +121,7 @@ def parse_single_node(link: str) -> dict:
         elif t_type in ["xhttp", "splithttp"]:
             xhttp_cfg = {"type": "xhttp"}
             if "path" in params: xhttp_cfg["path"] = params["path"]
-            if "host" in params: xhttp_cfg["host"] = [params["host"]]
+            if "host" in params: xhttp_cfg["host"] = params["host"]
             if "mode" in params: xhttp_cfg["mode"] = params["mode"]
             ob["transport"] = xhttp_cfg
         elif t_type == "http":
