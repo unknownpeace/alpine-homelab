@@ -15,12 +15,11 @@ log_info "Configuring OpenRC supervise-daemon auto-restart policies and Healthch
 
 apk_add smartmontools >/dev/null 2>&1 || true
 
-# 1. Inject supervise-daemon respawn policies into /etc/conf.d/* for all services
+# 1. Inject supervise-daemon respawn policies into existing /etc/conf.d/* files
 ensure_supervise_conf() {
     local svc="$1"
     local conf_file="/etc/conf.d/$svc"
-    mkdir -p /etc/conf.d
-    touch "$conf_file"
+    [ -f "$conf_file" ] || return 0
     sed -i '/^supervisor=/d; /^respawn_delay=/d; /^respawn_max=/d; /^respawn_period=/d' "$conf_file"
     cat << 'EOF' >> "$conf_file"
 supervisor="supervise-daemon"

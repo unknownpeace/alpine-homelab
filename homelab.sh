@@ -127,6 +127,14 @@ cmd_install() {
     sync_service_state "${ENABLE_ADGUARD_HOME:-no}" "$SERVICES_DIR/adguardhome/install.sh" "adguardhome"
     sync_service_state "${ENABLE_TAILSCALE:-no}" "$SERVICES_DIR/tailscale/install.sh" "tailscale" ""
 
+    # Ensure OpenRC supervise-daemon auto-recovery is enabled on all deployed services
+    for svc_name in caddy vaultwarden forgejo conduit tuwunel navidrome transmission-daemon wsdd adguardhome tailscale; do
+        if [ -f "/etc/conf.d/$svc_name" ]; then
+            grep -q "^supervisor=" "/etc/conf.d/$svc_name" || echo 'supervisor="supervise-daemon"' >> "/etc/conf.d/$svc_name"
+            grep -q "^respawn_period=" "/etc/conf.d/$svc_name" || printf "respawn_delay=3\nrespawn_max=10\nrespawn_period=60\n" >> "/etc/conf.d/$svc_name"
+        fi
+    done
+
     # Finalize host DNS resolver to local engine after all package downloads complete
     if [ "${ENABLE_SINGBOX:-yes}" = "yes" ] || [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
         log_info "Switching host resolver (/etc/resolv.conf) to local DNS engine..."

@@ -92,9 +92,12 @@ table inet homelab {
         ip protocol icmp icmp type { echo-request } limit rate 10/second burst 20 packets accept
         ip protocol icmp icmp type { echo-request } drop
 
-        # SSH & Forgejo Git SSH (ports 22, 2222) Brute-Force Rate Limiting:
-        # Max 4 new connections per minute (burst 6) per source IP; violators banned for 15m
-        tcp dport { 22, 2222 } ct state new update @ssh_meter { ip saddr limit rate over 4/minute burst 6 packets } \
+        # Trusted Management Networks (Localhost, RFC1918 Private LAN) - bypass brute-force limits
+        ip saddr { 127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport { 22, 2222 } accept
+
+        # Untrusted / Public SSH & Forgejo Git SSH (ports 22, 2222) Brute-Force Rate Limiting:
+        # Rate limit over 15 new connections per minute (burst 30) per source IP; violators banned for 15m
+        tcp dport { 22, 2222 } ct state new update @ssh_meter { ip saddr limit rate over 15/minute burst 30 packets } \
             add @ssh_banlist { ip saddr timeout 15m } log prefix "[NFT-SSH-BAN] " counter drop
 
         # Caddy HTTP/HTTPS (ports 80, 443) Connection & Credential-Stuffing Protection:

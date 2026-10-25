@@ -17,8 +17,16 @@ elif ! command -v conduit >/dev/null 2>&1; then
     apk_add conduit conduit-openrc
 fi
 
-mkdir -p /etc/conduit /var/lib/conduit /etc/homelab
+mkdir -p /etc/conduit /var/lib/conduit /etc/homelab /etc/conf.d
 chmod 700 /etc/homelab
+
+cat << 'EOF' > /etc/conf.d/conduit
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=10
+respawn_period=60
+export CONDUIT_CONFIG=/etc/conduit/conduit.toml
+EOF
 
 REG_TOKEN_FILE="/etc/homelab/matrix_registration_token.txt"
 if [ ! -f "$REG_TOKEN_FILE" ]; then

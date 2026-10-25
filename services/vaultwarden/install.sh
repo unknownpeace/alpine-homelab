@@ -40,6 +40,7 @@ supervisor="supervise-daemon"
 respawn_delay=3
 respawn_max=10
 respawn_period=60
+export DATA_FOLDER=/var/lib/vaultwarden
 ROCKET_ADDRESS=127.0.0.1
 ROCKET_PORT=8000
 DOMAIN=https://vault.$BASE_DOMAIN
@@ -48,7 +49,7 @@ WEB_VAULT_FOLDER=/usr/share/webapps/vaultwarden-web/
 SIGNUPS_ALLOWED=$SIGNUPS_VAL
 INVITATIONS_ALLOWED=true
 SHOW_PASSWORD_HINT=false
-DATABASE_URL=/var/lib/vaultwarden/db.sqlite3
+DATABASE_URL=sqlite:///var/lib/vaultwarden/db.sqlite3
 ENABLE_DB_WAL=true
 DATABASE_MAX_CONNS=10
 DATABASE_TIMEOUT=30
@@ -56,6 +57,7 @@ DATABASE_CONN_INIT="$VW_CONN_INIT"
 EOF
 
 cat << EOF > /var/lib/vaultwarden/.env
+export DATA_FOLDER=/var/lib/vaultwarden
 ROCKET_ADDRESS=127.0.0.1
 ROCKET_PORT=8000
 DOMAIN=https://vault.$BASE_DOMAIN
@@ -64,7 +66,7 @@ WEB_VAULT_FOLDER=/usr/share/webapps/vaultwarden-web/
 SIGNUPS_ALLOWED=$SIGNUPS_VAL
 INVITATIONS_ALLOWED=true
 SHOW_PASSWORD_HINT=false
-DATABASE_URL=/var/lib/vaultwarden/db.sqlite3
+DATABASE_URL=sqlite:///var/lib/vaultwarden/db.sqlite3
 ENABLE_DB_WAL=true
 DATABASE_MAX_CONNS=10
 DATABASE_TIMEOUT=30

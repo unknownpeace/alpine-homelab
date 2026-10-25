@@ -27,6 +27,7 @@ supervisor="supervise-daemon"
 respawn_delay=3
 respawn_max=10
 respawn_period=60
+navidrome_configfile=/etc/navidrome/navidrome.toml
 EOF
 
 cat << EOF > /etc/navidrome/navidrome.toml
