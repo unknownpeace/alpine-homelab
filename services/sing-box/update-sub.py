@@ -246,35 +246,67 @@ if TARGET and TARGET.lower() != "direct":
         if node:
             raw_outbounds.append(node)
     elif TARGET.startswith("http://") or TARGET.startswith("https://"):
-        req = urllib.request.Request(TARGET, headers={"User-Agent": "sing-box/1.14.3"})
-        resp_data = None
-        for attempt in range(1, 4):
-            try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    resp_data = resp.read().decode('utf-8', errors='ignore')
-                    break
-            except Exception as e:
-                print(f"Attempt {attempt}/3 failed to fetch subscription: {e}", file=sys.stderr)
-                time.sleep(2)
-        if resp_data:
+        urls_to_try = [TARGET]
+        if "fmt=best" in TARGET or "fmt=v2ray" in TARGET or "fmt=clash" in TARGET:
+            urls_to_try.insert(0, TARGET.replace("fmt=best", "fmt=sing-box").replace("fmt=v2ray", "fmt=sing-box").replace("fmt=clash", "fmt=sing-box"))
+        elif "fmt=" not in TARGET and any(x in TARGET for x in ["/sub/", "subscription", "token", "link"]):
+            sep = "&" if "?" in TARGET else "?"
+            urls_to_try.insert(0, TARGET + sep + "fmt=sing-box")
+
+        for turl in urls_to_try:
+            req = urllib.request.Request(turl, headers={"User-Agent": "sing-box/1.14.3"})
+            resp_data = None
+            for attempt in range(1, 3):
+                try:
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        resp_data = resp.read().decode('utf-8', errors='ignore')
+                        break
+                except Exception as e:
+                    time.sleep(1)
+            if not resp_data:
+                continue
+
+            # 1. Try JSON dict or list
             try:
                 j = json.loads(resp_data)
                 if isinstance(j, dict) and "outbounds" in j:
                     raw_outbounds = j.get("outbounds", [])
+                    if raw_outbounds:
+                        break
+                elif isinstance(j, list):
+                    if j and isinstance(j[0], dict) and ("type" in j[0] or "server" in j[0]):
+                        raw_outbounds = j
+                        break
+                    v2ray_nodes = []
+                    for item in j:
+                        if isinstance(item, dict):
+                            remarks = item.get("remarks") or "Node"
+                            for ob in item.get("outbounds", []):
+                                if ob.get("type") in ["vless", "vmess", "trojan", "shadowsocks", "hysteria2"]:
+                                    ob["tag"] = remarks
+                                    v2ray_nodes.append(ob)
+                    if v2ray_nodes:
+                        raw_outbounds = v2ray_nodes
+                        break
             except Exception:
-                text_lines = []
-                try:
-                    padded = resp_data.strip() + "=" * (-len(resp_data.strip()) % 4)
-                    decoded_text = base64.b64decode(padded).decode('utf-8', errors='ignore')
-                    text_lines = decoded_text.splitlines()
-                except Exception:
-                    text_lines = resp_data.splitlines()
-                for line in text_lines:
-                    line = line.strip()
-                    if any(line.startswith(proto) for proto in ["vless://", "ss://", "trojan://", "hy2://", "hysteria2://"]):
-                        n = parse_single_node(line)
-                        if n:
-                            raw_outbounds.append(n)
+                pass
+
+            # 2. Try Base64 or plain text lines
+            text_lines = []
+            try:
+                padded = resp_data.strip() + "=" * (-len(resp_data.strip()) % 4)
+                decoded_text = base64.b64decode(padded).decode('utf-8', errors='ignore')
+                text_lines = decoded_text.splitlines()
+            except Exception:
+                text_lines = resp_data.splitlines()
+            for line in text_lines:
+                line = line.strip()
+                if any(line.startswith(proto) for proto in ["vless://", "ss://", "trojan://", "hy2://", "hysteria2://"]):
+                    n = parse_single_node(line)
+                    if n:
+                        raw_outbounds.append(n)
+            if raw_outbounds:
+                break
 
 def is_dummy(ob):
     tag = ob.get("tag", "")

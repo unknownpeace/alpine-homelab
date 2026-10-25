@@ -27,14 +27,15 @@ if [ ! -d /var/lib/sing-box/ui ] || [ ! -f /var/lib/sing-box/ui/index.html ]; th
     curl -fL --retry 3 --progress-bar https://github.com/MetaCubeX/metacubexd/releases/download/v1.273.1/compressed-dist.tgz -o /tmp/metacubexd.tgz
     tar -xzf /tmp/metacubexd.tgz -C /var/lib/sing-box/ui
     rm -f /tmp/metacubexd.tgz
+fi
 
-    cat << 'EOF' > /var/lib/sing-box/ui/config.js
+# Configure Metacubexd to connect to current host origin automatically
+cat << 'EOF' > /var/lib/sing-box/ui/config.js
 window.__METACUBEXD_CONFIG__ = {
-  defaultBackendURL: '',
+  defaultBackendURL: window.location.origin,
   githubToken: '',
 }
 EOF
-fi
 
 # 3. Rule-sets
 chmod +x "$SERVICE_DIR/update-rules.sh"
@@ -67,7 +68,7 @@ if [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
 fi
 
 log_info "Compiling sing-box routing tables and DNS mapping (*.$BASE_DOMAIN)..."
-IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREAM_PRIMARY" DNS_UPSTREAM_SECONDARY="$DNS_UPSTREAM_SECONDARY" SINGBOX_DNS_PORT="$SINGBOX_DNS_PORT" /usr/local/bin/update-sub.py "$SUB_URL"
+IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREAM_PRIMARY" DNS_UPSTREAM_SECONDARY="$DNS_UPSTREAM_SECONDARY" SINGBOX_DNS_PORT="$SINGBOX_DNS_PORT" ENABLE_ADGUARD_HOME="$ENABLE_ADGUARD_HOME" /usr/local/bin/update-sub.py "$SUB_URL"
 
 rc-update add sing-box default >/dev/null 2>&1 || true
 rc-service sing-box restart >/dev/null 2>&1 || true

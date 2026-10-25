@@ -267,6 +267,7 @@ def api_create():
     response.content_type = "application/json"
     data = request.json or {}
     name = data.get("name", "").strip()
+    clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "-", name).strip("-").lower()
     distro = data.get("distro", "alpine").strip().lower()
     release = data.get("release", "3.24").strip()
     net_mode = data.get("net_mode", "lan").strip().lower()
@@ -274,12 +275,13 @@ def api_create():
     autostart = bool(data.get("autostart", False))
     start_now = bool(data.get("start_now", True))
 
-    if not re.match(r"^[a-zA-Z0-9_\-]{2,32}$", name):
-        return {"success": False, "error": "Invalid name (use 2-32 alphanumeric characters, dash, or underscore)."}
+    if not clean_name or len(clean_name) < 2 or len(clean_name) > 32:
+        return {"success": False, "error": "Имя контейнера должно содержать от 2 до 32 символов (латинские буквы a-z, цифры, дефис или подчеркивание)."}
+    name = clean_name
 
     target_dir = os.path.join(LXC_DIR, name)
     if os.path.exists(target_dir):
-        return {"success": False, "error": f"Container '{name}' already exists."}
+        return {"success": False, "error": f"Контейнер '{name}' уже существует."}
 
     # Decide creation method: Fast Local Cache vs Official lxc-download
     rootfs_dir = os.path.join(target_dir, "rootfs")
@@ -292,7 +294,7 @@ def api_create():
             code, _, err = run_cmd(["tar", "-xzf", MINIROOTFS_CACHE, "-C", rootfs_dir], timeout=30)
             if code != 0:
                 shutil.rmtree(target_dir, ignore_errors=True)
-                return {"success": False, "error": "Failed to extract rootfs: " + err}
+                return {"success": False, "error": "Ошибка распаковки rootfs: " + err}
 
             # Prepare base config
             if net_mode == "lan":
@@ -348,10 +350,10 @@ lxc.start.auto = {"1" if autostart else "0"}
             code, out, err = run_cmd([
                 "lxc-create", "-n", name, "-t", "download", "--",
                 "-d", distro, "-r", release, "-a", "amd64"
-            ], timeout=180)
+            ], timeout=300)
             if code != 0:
                 shutil.rmtree(target_dir, ignore_errors=True)
-                return {"success": False, "error": f"lxc-download failed: {err or out}"}
+                return {"success": False, "error": f"Ошибка создания контейнера (lxc-download): {err or out}"}
 
             # Update container configuration for network mode
             cfg_path = os.path.join(target_dir, "config")
@@ -394,9 +396,9 @@ lxc.start.auto = {"1" if autostart else "0"}
         if start_now:
             s_code, _, s_err = run_cmd(["lxc-start", "-n", name, "-d"])
             if s_code != 0:
-                return {"success": True, "warning": "Container created, but failed to start: " + s_err}
+                return {"success": True, "message": f"Контейнер '{name}' создан, но не смог запуститься автоматически: {s_err}", "warning": s_err}
 
-        return {"success": True, "message": f"Container '{name}' ({distro} {release}) created successfully!"}
+        return {"success": True, "message": f"Контейнер '{name}' ({distro} {release}) успешно создан и запущен!"}
 
     except Exception as e:
         shutil.rmtree(target_dir, ignore_errors=True)
@@ -776,7 +778,8 @@ INDEX_HTML = """<!DOCTYPE html>
             <form id="create-form" onsubmit="handleCreate(event)" class="space-y-4 text-sm">
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Имя контейнера</label>
-                    <input type="text" id="new-name" required placeholder="например, test-node, sandbox-1" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono">
+                    <input type="text" id="new-name" required placeholder="например: test-sandbox, dev-node-1" oninput="this.value = this.value.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+                    <p class="text-[11px] text-slate-500 mt-1">Только латинские буквы a-z, цифры и дефис (2-32 символа).</p>
                 </div>
 
                 <!-- Cascade Distro & Version Select -->
@@ -849,8 +852,16 @@ INDEX_HTML = """<!DOCTYPE html>
                     </label>
                 </div>
 
+                <div id="create-progress" class="hidden p-3 bg-brand-950/40 border border-brand-500/30 rounded-xl space-y-2">
+                    <div class="flex items-center gap-2 text-xs text-brand-300 font-medium">
+                        <svg class="animate-spin w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        <span id="create-progress-text">Развертывание контейнера... Пожалуйста, подождите.</span>
+                    </div>
+                    <p class="text-[11px] text-slate-400">Для Alpine minirootfs создание занимает ~1 секунду. При первой загрузке других ОС (Debian, Ubuntu) скачивание образа может занять до 1-2 минут.</p>
+                </div>
+
                 <div class="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
-                    <button type="button" onclick="closeCreateModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
+                    <button type="button" id="btn-create-cancel" onclick="closeCreateModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
                     <button type="submit" id="btn-create-submit" class="px-5 py-2 bg-brand-600 hover:bg-brand-500 text-white font-medium rounded-lg shadow-md transition text-xs">Создать Sandbox</button>
                 </div>
             </form>
@@ -1173,13 +1184,27 @@ INDEX_HTML = """<!DOCTYPE html>
 
         function closeCreateModal() {
             document.getElementById('create-modal').classList.add('hidden');
+            const progress = document.getElementById('create-progress');
+            if (progress) progress.classList.add('hidden');
+            const btnSubmit = document.getElementById('btn-create-submit');
+            const btnCancel = document.getElementById('btn-create-cancel');
+            if (btnSubmit) { btnSubmit.disabled = false; btnSubmit.classList.remove('opacity-50'); btnSubmit.innerText = 'Создать Sandbox'; }
+            if (btnCancel) btnCancel.disabled = false;
         }
 
         async function handleCreate(e) {
             e.preventDefault();
-            const btn = document.getElementById('btn-create-submit');
-            btn.disabled = true;
-            btn.innerText = 'Развертывание...';
+            const btnSubmit = document.getElementById('btn-create-submit');
+            const btnCancel = document.getElementById('btn-create-cancel');
+            const progress = document.getElementById('create-progress');
+            const progressText = document.getElementById('create-progress-text');
+
+            const rawName = document.getElementById('new-name').value.trim();
+            const cleanName = rawName.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase();
+            if (!cleanName || cleanName.length < 2) {
+                showToast('Введите корректное имя контейнера (от 2 символов: латиница, цифры, дефис)', 'error');
+                return;
+            }
 
             let distro = document.getElementById('new-distro').value;
             let release = document.getElementById('new-release').value;
@@ -1192,7 +1217,7 @@ INDEX_HTML = """<!DOCTYPE html>
             const netMode = document.querySelector('input[name="net_mode"]:checked').value;
 
             const payload = {
-                name: document.getElementById('new-name').value.trim(),
+                name: cleanName,
                 distro: distro,
                 release: release,
                 net_mode: netMode,
@@ -1201,27 +1226,44 @@ INDEX_HTML = """<!DOCTYPE html>
                 start_now: document.getElementById('new-startnow').checked
             };
 
+            btnSubmit.disabled = true;
+            if (btnCancel) btnCancel.disabled = true;
+            btnSubmit.classList.add('opacity-50');
+            btnSubmit.innerText = 'Развертывание...';
+            if (progress) {
+                progress.classList.remove('hidden');
+                if (progressText) progressText.innerText = `Развертывание '${cleanName}' (${distro} ${release})...`;
+            }
+
             try {
                 const res = await fetch('/api/containers/create', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(payload)
                 });
-                const d = await res.json();
+                let d;
+                try {
+                    d = await res.json();
+                } catch (jsonErr) {
+                    throw new Error(`Ошибка ответа сервера (HTTP ${res.status})`);
+                }
                 if (d.success) {
-                    showToast(d.message, 'success');
+                    showToast(d.message || `Контейнер '${cleanName}' успешно создан!`, d.warning ? 'info' : 'success');
                     closeCreateModal();
                     document.getElementById('create-form').reset();
                     fetchCatalog();
                     refreshData();
                 } else {
-                    showToast(d.error || 'Ошибка при создании', 'error');
+                    showToast(d.error || 'Ошибка при создании контейнера', 'error');
                 }
             } catch (err) {
                 showToast(`Ошибка: ${err.message}`, 'error');
             } finally {
-                btn.disabled = false;
-                btn.innerText = 'Создать Sandbox';
+                btnSubmit.disabled = false;
+                if (btnCancel) btnCancel.disabled = false;
+                btnSubmit.classList.remove('opacity-50');
+                btnSubmit.innerText = 'Создать Sandbox';
+                if (progress) progress.classList.add('hidden');
             }
         }
 
@@ -1496,4 +1538,15 @@ def index():
     return INDEX_HTML
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8888, server="wsgiref")
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIServer, make_server
+
+    class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    class ThreadedWSGIServerAdapter(bottle.ServerAdapter if hasattr(bottle, "ServerAdapter") else object):
+        def run(self, handler):
+            server = make_server(self.host, self.port, handler, server_class=ThreadingWSGIServer)
+            server.serve_forever()
+
+    app.run(host="127.0.0.1", port=8888, server=ThreadedWSGIServerAdapter)

@@ -79,6 +79,8 @@ supervisor="supervise-daemon"
 command="/usr/bin/python3"
 command_args="/opt/lxc-manager/app.py"
 directory="/opt/lxc-manager"
+output_log="/var/log/lxc-manager.log"
+error_log="/var/log/lxc-manager.err"
 respawn_delay=2
 respawn_max=5
 
