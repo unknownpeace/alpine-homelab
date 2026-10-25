@@ -132,7 +132,8 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
     echo -e "   ${C_CYAN}1)${C_RESET} Полный стек (9 сервисов + LXC, «всё включено», ~450 МБ RAM) [По умолчанию]"
     echo -e "   ${C_CYAN}2)${C_RESET} Чистый сетевой шлюз (Caddy + sing-box, экономия RAM, ~45 МБ, без контейнеров)"
     echo -e "   ${C_CYAN}3)${C_RESET} Шлюз + LXC Контейнеры (Caddy + sing-box + LXC Sandbox, ~150 МБ RAM)"
-    printf "   Ваш выбор [1-3, Enter = 1]: "
+    echo -e "   ${C_CYAN}4)${C_RESET} Выборочная установка (выбрать конкретные сервисы вручную)"
+    printf "   Ваш выбор [1-4, Enter = 1]: "
     read -r IN_STACK
     case "$IN_STACK" in
         2)
@@ -147,6 +148,8 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
             ENABLE_TRANSMISSION="no"
             ENABLE_SAMBA="no"
             ENABLE_YTDLP="no"
+            ENABLE_ADGUARD_HOME="no"
+            ENABLE_TAILSCALE="no"
             ;;
         3)
             ENABLE_CADDY="yes"
@@ -160,6 +163,78 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
             ENABLE_TRANSMISSION="no"
             ENABLE_SAMBA="no"
             ENABLE_YTDLP="no"
+            ENABLE_ADGUARD_HOME="no"
+            ENABLE_TAILSCALE="no"
+            ;;
+        4)
+            ENABLE_CADDY="yes"
+            ENABLE_SINGBOX="yes"
+            ENABLE_DASHBOARD="yes"
+            ENABLE_LXC_MANAGER="no"
+            ENABLE_VAULTWARDEN="no"
+            ENABLE_FORGEJO="no"
+            ENABLE_CONDUIT="no"
+            ENABLE_NAVIDROME="no"
+            ENABLE_TRANSMISSION="no"
+            ENABLE_SAMBA="no"
+            ENABLE_YTDLP="no"
+            ENABLE_ADGUARD_HOME="no"
+            ENABLE_TAILSCALE="no"
+
+            echo ""
+            echo -e "${C_CYAN}--- Выборочная настройка сервисов ---${C_RESET}"
+            echo -e "   ${C_WHITE}1)${C_RESET} Vaultwarden        (Менеджер паролей Bitwarden, SQLite)"
+            echo -e "   ${C_WHITE}2)${C_RESET} Forgejo Git        (Персональный Git-сервер, SSH: 2222)"
+            echo -e "   ${C_WHITE}3)${C_RESET} Conduit Matrix     (Сервер приватного мессенджера Matrix)"
+            echo -e "   ${C_WHITE}4)${C_RESET} Navidrome Music    (Музыкальный стриминг-сервер, Subsonic)"
+            echo -e "   ${C_WHITE}5)${C_RESET} Transmission       (Торрент-клиент BitTorrent)"
+            echo -e "   ${C_WHITE}6)${C_RESET} Media Downloader   (yt-dlp веб-интерфейс скачивания медиа)"
+            echo -e "   ${C_WHITE}7)${C_RESET} Samba / WSDD       (Сетевые папки Windows/Mac в проводнике)"
+            echo -e "   ${C_WHITE}8)${C_RESET} LXC Sandbox        (Менеджер контейнеров и веб-терминал ttyd)"
+            echo -e "   ${C_WHITE}9)${C_RESET} AdGuard Home       (DNS блокировщик рекламы и трекеров)"
+            echo -e "  ${C_WHITE}10)${C_RESET} Tailscale VPN      (Удаленный доступ Mesh VPN без белого IP)"
+            echo ""
+            printf "   Введите номера через запятую (напр. 1,5,8) или Enter для пошаговых вопросов [y/N]: "
+            read -r IN_CUSTOM
+
+            if [ -n "$IN_CUSTOM" ]; then
+                for num in $(echo "$IN_CUSTOM" | tr ',' ' '); do
+                    case "$num" in
+                        1) ENABLE_VAULTWARDEN="yes" ;;
+                        2) ENABLE_FORGEJO="yes" ;;
+                        3) ENABLE_CONDUIT="yes" ;;
+                        4) ENABLE_NAVIDROME="yes" ;;
+                        5) ENABLE_TRANSMISSION="yes" ;;
+                        6) ENABLE_YTDLP="yes" ;;
+                        7) ENABLE_SAMBA="yes" ;;
+                        8) ENABLE_LXC_MANAGER="yes" ;;
+                        9) ENABLE_ADGUARD_HOME="yes" ;;
+                        10) ENABLE_TAILSCALE="yes" ;;
+                    esac
+                done
+            else
+                ask_svc() {
+                    local prompt="$1"
+                    local ans
+                    printf "   %s [y/N]: " "$prompt"
+                    read -r ans
+                    case "$ans" in
+                        [yY]|[yY][eE][sS]|1) echo "yes" ;;
+                        *) echo "no" ;;
+                    esac
+                }
+                echo ""
+                ENABLE_VAULTWARDEN=$(ask_svc "1. Установить Vaultwarden (пароли Bitwarden)?")
+                ENABLE_FORGEJO=$(ask_svc "2. Установить Forgejo (Git-сервер)?")
+                ENABLE_CONDUIT=$(ask_svc "3. Установить Conduit (Matrix мессенджер)?")
+                ENABLE_NAVIDROME=$(ask_svc "4. Установить Navidrome (Музыка)?")
+                ENABLE_TRANSMISSION=$(ask_svc "5. Установить Transmission (Торренты)?")
+                ENABLE_YTDLP=$(ask_svc "6. Установить Media Downloader (yt-dlp)?")
+                ENABLE_SAMBA=$(ask_svc "7. Установить Samba / WSDD (Сетевые папки)?")
+                ENABLE_LXC_MANAGER=$(ask_svc "8. Установить LXC Sandbox (Контейнеры)?")
+                ENABLE_ADGUARD_HOME=$(ask_svc "9. Установить AdGuard Home (Блокировка рекламы)?")
+                ENABLE_TAILSCALE=$(ask_svc "10. Установить Tailscale Mesh VPN?")
+            fi
             ;;
         *)
             ENABLE_CADDY="yes"
@@ -173,6 +248,8 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
             ENABLE_TRANSMISSION="yes"
             ENABLE_SAMBA="yes"
             ENABLE_YTDLP="yes"
+            ENABLE_ADGUARD_HOME="no"
+            ENABLE_TAILSCALE="no"
             ;;
     esac
 
