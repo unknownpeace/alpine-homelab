@@ -295,6 +295,41 @@ def test_tailscale_routing_bypass():
         log_fail("sing-box configuration missing 100.64.0.0/10 -> direct outbound rule!")
         return False
 
+def test_nftables_dynamic_sets_and_watchdog():
+    log_test("8. Zero-Trust nftables Dynamic Sets & Proactive Watchdog")
+    failures = 0
+
+    # 8.1 nftables dynamic sets
+    code_ssh, out_ssh, _ = run_cmd("nft list set inet homelab ssh_banlist")
+    if code_ssh == 0 and "type ipv4_addr" in out_ssh:
+        log_pass("nftables dynamic set @ssh_banlist active (timeout 15m)")
+    else:
+        log_fail(f"@ssh_banlist missing or error: {out_ssh}")
+        failures += 1
+
+    code_web, out_web, _ = run_cmd("nft list set inet homelab web_banlist")
+    if code_web == 0 and "type ipv4_addr" in out_web:
+        log_pass("nftables dynamic set @web_banlist active (timeout 10m)")
+    else:
+        log_fail(f"@web_banlist missing or error: {out_web}")
+        failures += 1
+
+    # 8.2 Watchdog health status
+    code_wd, out_wd, _ = run_cmd("/usr/local/bin/homelab-watchdog.sh")
+    if code_wd == 0:
+        log_pass("homelab-watchdog.sh executed successfully")
+    else:
+        log_fail(f"homelab-watchdog.sh returned error: {out_wd}")
+        failures += 1
+
+    if os.path.exists("/var/run/homelab-health.json"):
+        log_pass("Watchdog state file /var/run/homelab-health.json generated")
+    else:
+        log_fail("Missing /var/run/homelab-health.json")
+        failures += 1
+
+    return failures == 0
+
 def main():
     print("==================================================================", flush=True)
     print("    Alpine Homelab Appliance - Service Regression Test Suite      ", flush=True)
@@ -308,17 +343,18 @@ def main():
         test_https_endpoints(cfg),
         test_samba_configuration(),
         test_port_forwarding(),
-        test_tailscale_routing_bypass()
+        test_tailscale_routing_bypass(),
+        test_nftables_dynamic_sets_and_watchdog()
     ]
 
     print("\n==================================================================", flush=True)
     if all(results):
-        print("  🎉 ALL HOMELAB SERVICE SUITE TESTS PASSED SUCCESSFULLY! (7/7)", flush=True)
+        print(f"  🎉 ALL HOMELAB SERVICE SUITE TESTS PASSED SUCCESSFULLY! ({len(results)}/{len(results)})", flush=True)
         print("==================================================================", flush=True)
         sys.exit(0)
     else:
         passed = sum(1 for r in results if r)
-        print(f"  ❌ TEST SUITE FAILED: {passed}/7 tests passed.", flush=True)
+        print(f"  ❌ TEST SUITE FAILED: {passed}/{len(results)} tests passed.", flush=True)
         print("==================================================================", flush=True)
         sys.exit(1)
 

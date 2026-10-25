@@ -21,6 +21,7 @@ import sys
 import re
 import json
 import time
+import random
 import shutil
 import platform
 import threading
@@ -40,6 +41,8 @@ MINIROOTFS_CACHE = os.path.join(LXC_DIR, "cache", "alpine-minirootfs.tar.gz")
 CATALOG_CACHE_FILE = os.path.join(LXC_DIR, "cache", "upstream-catalog.json")
 CADDY_CONF_DIR = "/etc/caddy/conf.d"
 PORT_FORWARDS_FILE = "/etc/lxc/port-forwards.json"
+SNAPSHOT_SCHEDULE_FILE = "/etc/lxc/snapshot-schedule.json"
+CRONTAB_ROOT_FILE = "/etc/crontabs/root"
 
 UPSTREAM_INDEX_URL = "https://images.linuxcontainers.org/meta/1.0/index-system"
 FALLBACK_INDEX_URL = "https://uk.images.linuxcontainers.org/meta/1.0/index-system"
@@ -374,6 +377,40 @@ def get_cached_templates():
 # Container Details and Cgroup v2 Metrics
 # -----------------------------------------------------------------------------
 
+def generate_lxc_mac():
+    # Generate a locally administered Xen/LXC OUI MAC address (00:16:3e:xx:xx:xx)
+    return "00:16:3e:%02x:%02x:%02x" % (
+        random.randint(0x00, 0x7f),
+        random.randint(0x00, 0xff),
+        random.randint(0x00, 0xff),
+    )
+
+def build_cgroup2_directives(memory_mb=0, cpu_quota=0, pids_max=512):
+    # Build hardened cgroups v2 directives for LXC container config
+    lines = []
+    if memory_mb > 0:
+        mem_high = max(64, int(memory_mb * 0.9))
+        lines.append(f"lxc.cgroup2.memory.max = {memory_mb}M\n")
+        lines.append(f"lxc.cgroup2.memory.high = {mem_high}M\n")
+        lines.append("lxc.cgroup2.memory.swap.max = 0\n")
+    if cpu_quota > 0:
+        quota_us = cpu_quota * 1000
+        lines.append(f"lxc.cgroup2.cpu.max = {quota_us} 100000\n")
+    if pids_max > 0:
+        lines.append(f"lxc.cgroup2.pids.max = {pids_max}\n")
+    return "".join(lines)
+
+def apply_live_cgroup2_limits(name, memory_mb=0, cpu_quota=0, pids_max=512):
+    # Apply cgroups v2 resource limits on-the-fly to a running LXC container
+    mem_arg = f"{memory_mb}M" if memory_mb > 0 else "max"
+    mem_high_arg = f"{max(64, int(memory_mb * 0.9))}M" if memory_mb > 0 else "max"
+    cpu_arg = f"{cpu_quota * 1000} 100000" if cpu_quota > 0 else "max 100000"
+    pids_arg = str(pids_max) if pids_max > 0 else "max"
+    run_cmd(["lxc-cgroup", "-n", name, "memory.max", mem_arg])
+    run_cmd(["lxc-cgroup", "-n", name, "memory.high", mem_high_arg])
+    run_cmd(["lxc-cgroup", "-n", name, "cpu.max", cpu_arg])
+    run_cmd(["lxc-cgroup", "-n", name, "pids.max", pids_arg])
+
 def parse_container_info(name):
     code, out, _ = run_cmd(["lxc-info", "-n", name], timeout=5)
     data = {
@@ -387,6 +424,7 @@ def parse_container_info(name):
         "net_mode": "nat",
         "mem_limit": "max",
         "cpu_limit": "max",
+        "pids_limit": "512",
         "routes_count": 0,
         "ports_count": 0
     }
@@ -428,9 +466,17 @@ def parse_container_info(name):
                 m_mem = re.search(r"^\s*lxc\.cgroup2\.memory\.max\s*=\s*([^\s]+)", content, re.M)
                 if m_mem:
                     data["mem_limit"] = m_mem.group(1)
-                m_cpu = re.search(r"^\s*lxc\.cgroup2\.cpu\.max\s*=\s*([^\s]+)", content, re.M)
+                m_cpu = re.search(r"^\s*lxc\.cgroup2\.cpu\.max\s*=\s*(\d+|max)(?:\s+(\d+))?", content, re.M)
                 if m_cpu:
-                    data["cpu_limit"] = m_cpu.group(1)
+                    q_val = m_cpu.group(1)
+                    p_val = int(m_cpu.group(2) or 100000)
+                    if q_val.isdigit() and p_val > 0:
+                        data["cpu_limit"] = f"{int(q_val) * 100 // p_val}%"
+                    else:
+                        data["cpu_limit"] = "max"
+                m_pids = re.search(r"^\s*lxc\.cgroup2\.pids\.max\s*=\s*([^\s]+)", content, re.M)
+                if m_pids:
+                    data["pids_limit"] = m_pids.group(1)
         except Exception:
             pass
 
@@ -450,6 +496,14 @@ def parse_container_info(name):
                             data["mem_limit"] = val
                     else:
                         data["mem_limit"] = "max"
+            cpu_max_file = os.path.join(cg_path, "cpu.max")
+            if os.path.exists(cpu_max_file):
+                with open(cpu_max_file, "r") as f:
+                    parts = f.read().strip().split()
+                    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                        data["cpu_limit"] = f"{int(parts[0]) * 100 // int(parts[1])}%"
+                    elif parts and parts[0] == "max":
+                        data["cpu_limit"] = "max"
         except Exception:
             pass
 
@@ -1049,6 +1103,7 @@ def api_get_limits(name):
     cfg_file = os.path.join(target_dir, "config")
     mem_mb = 0
     cpu_quota = 0
+    pids_max = 512
     nesting_enabled = False
 
     if os.path.exists(cfg_file):
@@ -1057,13 +1112,16 @@ def api_get_limits(name):
             m_mem = re.search(r"^\s*lxc\.cgroup2\.memory\.max\s*=\s*(\d+)M", content, re.M)
             if m_mem:
                 mem_mb = int(m_mem.group(1))
-            m_cpu = re.search(r"^\s*lxc\.cgroup2\.cpu\.max\s*=\s*(\d+)", content, re.M)
+            m_cpu = re.search(r"^\s*lxc\.cgroup2\.cpu\.max\s*=\s*(\d+)(?:\s+(\d+))?", content, re.M)
             if m_cpu:
-                cpu_quota = int(m_cpu.group(1)) // 1000
+                period = int(m_cpu.group(2) or 100000)
+                cpu_quota = (int(m_cpu.group(1)) * 100) // period if period > 0 else int(m_cpu.group(1)) // 1000
+            m_pids = re.search(r"^\s*lxc\.cgroup2\.pids\.max\s*=\s*(\d+)", content, re.M)
+            if m_pids:
+                pids_max = int(m_pids.group(1))
             if re.search(r"^\s*lxc\.include\s*=\s*/usr/share/lxc/config/nesting\.conf", content, re.M):
                 nesting_enabled = True
 
-    # Live cgroup status
     cg_path = f"/sys/fs/cgroup/lxc.payload.{name}"
     current_mem_mb = 0
     if os.path.exists(cg_path):
@@ -1080,6 +1138,7 @@ def api_get_limits(name):
         "name": name,
         "memory_mb": mem_mb,
         "cpu_quota": cpu_quota,
+        "pids_max": pids_max,
         "current_mem_mb": current_mem_mb,
         "nesting": nesting_enabled
     }
@@ -1095,6 +1154,7 @@ def api_set_limits(name):
     try:
         mem_mb = int(data.get("memory_mb", 0) or 0)
         cpu_quota = int(data.get("cpu_quota", 0) or 0)
+        pids_max = int(data.get("pids_max", 512) or 512)
     except ValueError:
         return {"success": False, "error": "Invalid limit values."}
 
@@ -1106,16 +1166,14 @@ def api_set_limits(name):
             lines = f.readlines()
         new_lines = []
         for line in lines:
-            if not line.strip().startswith("lxc.cgroup2.memory.max") and not line.strip().startswith("lxc.cgroup2.cpu.max"):
-                if nesting_req is not None and "nesting.conf" in line:
-                    continue
-                new_lines.append(line)
+            s = line.strip()
+            if s.startswith(("lxc.cgroup2.memory.", "lxc.cgroup2.cpu.", "lxc.cgroup2.pids.")):
+                continue
+            if nesting_req is not None and "nesting.conf" in line:
+                continue
+            new_lines.append(line)
 
-        if mem_mb > 0:
-            new_lines.append(f"lxc.cgroup2.memory.max = {mem_mb}M\n")
-        if cpu_quota > 0:
-            quota = cpu_quota * 1000
-            new_lines.append(f"lxc.cgroup2.cpu.max = {quota} 100000\n")
+        new_lines.append(build_cgroup2_directives(mem_mb, cpu_quota, pids_max))
 
         if nesting_req is not None and bool(nesting_req):
             new_lines.append("\n# Nesting support (Docker / Podman inside LXC)\n")
@@ -1125,15 +1183,14 @@ def api_set_limits(name):
         with open(cfg_file, "w", encoding="utf-8") as f:
             f.writelines(new_lines)
 
-    # Apply on-the-fly via lxc-cgroup if running
     c_info = parse_container_info(name)
     if c_info.get("state") == "RUNNING":
-        mem_arg = f"{mem_mb}M" if mem_mb > 0 else "max"
-        run_cmd(["lxc-cgroup", "-n", name, "memory.max", mem_arg])
-        cpu_arg = f"{cpu_quota * 1000} 100000" if cpu_quota > 0 else "max 100000"
-        run_cmd(["lxc-cgroup", "-n", name, "cpu.max", cpu_arg])
+        apply_live_cgroup2_limits(name, mem_mb, cpu_quota, pids_max)
 
-    return {"success": True, "message": f"Лимиты для '{name}' успешно обновлены (RAM: {mem_mb or 'без лимита'} MB, CPU: {cpu_quota or 'без лимита'}%)!"}
+    return {
+        "success": True,
+        "message": f"Лимиты cgroup v2 для '{name}' обновлены (RAM: {mem_mb or 'max'} MB, CPU: {cpu_quota or 'max'}%, PIDs: {pids_max or 'max'})!"
+    }
 
 @app.route("/api/containers/<name>/clone", method="POST")
 def api_clone(name):
@@ -1153,9 +1210,14 @@ def api_clone(name):
     if os.path.exists(dest_dir):
         return {"success": False, "error": f"Контейнер с именем '{clean_name}' уже существует."}
 
+    # Compute next free NAT IP BEFORE stopping source container so its IP is never reused
+    metrics = get_host_metrics()
+    new_ip = metrics.get("suggested_ip", "10.0.3.50")
+
     c_info = parse_container_info(name)
     was_running = (c_info.get("state") == "RUNNING")
     if was_running:
+        run_cmd(["lxc-stop", "-n", name, "-t", "10"])
         run_cmd(["lxc-stop", "-n", name, "-k"])
 
     try:
@@ -1163,28 +1225,158 @@ def api_clone(name):
         if code != 0:
             return {"success": False, "error": f"Ошибка клонирования: {err or out}"}
 
-        # Update IP in clone config if NAT
         cfg_path = os.path.join(dest_dir, "config")
+        rootfs_dir = os.path.join(dest_dir, "rootfs")
+        new_mac = generate_lxc_mac()
+
         if os.path.exists(cfg_path):
             with open(cfg_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            # If NAT with static IP, assign next available IP
+
+            # 1. Update container hostname & rootfs path
+            content = re.sub(r"^\s*lxc\.uts\.name\s*=\s*[^\s]+", f"lxc.uts.name = {clean_name}", content, flags=re.M)
+            content = re.sub(r"^\s*lxc\.rootfs\.path\s*=\s*dir:[^\s]+", f"lxc.rootfs.path = dir:{rootfs_dir}", content, flags=re.M)
+
+            # 2. Assign fresh MAC address to prevent L2/DHCP collisions on br0 & lxcbr0
+            if re.search(r"^\s*lxc\.net\.0\.hwaddr\s*=", content, re.M):
+                content = re.sub(r"^\s*lxc\.net\.0\.hwaddr\s*=\s*[^\s]+", f"lxc.net.0.hwaddr = {new_mac}", content, flags=re.M)
+            else:
+                content += f"\nlxc.net.0.hwaddr = {new_mac}\n"
+
+            # 3. Reassign static NAT IP (10.0.3.x) if configured
             if "10.0.3." in content:
-                metrics = get_host_metrics()
-                new_ip = metrics.get("suggested_ip", "10.0.3.50")
-                content = re.sub(r"lxc\.net\.0\.ipv4\.address\s*=\s*10\.0\.3\.\d+", f"lxc.net.0.ipv4.address = {new_ip}", content)
-                with open(cfg_path, "w", encoding="utf-8") as f:
-                    f.write(content)
+                content = re.sub(
+                    r"(lxc\.net\.0\.ipv4\.address\s*=\s*)10\.0\.3\.\d+(\/\d+)?",
+                    f"\\g<1>{new_ip}/24",
+                    content
+                )
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+        # 4. Sanitize cloned rootfs identity (hostname, machine-id, static network files)
+        if os.path.exists(rootfs_dir):
+            hostname_file = os.path.join(rootfs_dir, "etc", "hostname")
+            try:
+                with open(hostname_file, "w", encoding="utf-8") as hf:
+                    hf.write(clean_name + "\n")
+            except Exception:
+                pass
+
+            # Regenerate /etc/machine-id so systemd/udhcpc/dhclient request a unique DHCP lease on br0
+            for mid_rel in [("etc", "machine-id"), ("var", "lib", "dbus", "machine-id")]:
+                mid_path = os.path.join(rootfs_dir, *mid_rel)
+                if os.path.exists(mid_path) and not os.path.islink(mid_path):
+                    try:
+                        new_mid = "%032x\n" % random.getrandbits(128)
+                        with open(mid_path, "w", encoding="utf-8") as mf:
+                            mf.write(new_mid)
+                    except Exception:
+                        pass
+
+            # Update /etc/network/interfaces if static NAT IP was baked into rootfs
+            ifaces_path = os.path.join(rootfs_dir, "etc", "network", "interfaces")
+            if os.path.exists(ifaces_path):
+                try:
+                    with open(ifaces_path, "r", encoding="utf-8") as inf:
+                        if_txt = inf.read()
+                    if "10.0.3." in if_txt:
+                        if_txt = re.sub(r"address\s+10\.0\.3\.\d+", f"address {new_ip}", if_txt)
+                        with open(ifaces_path, "w", encoding="utf-8") as inf:
+                            inf.write(if_txt)
+                except Exception:
+                    pass
 
         ensure_container_dns(clean_name)
 
         if start_now:
             run_cmd(["lxc-start", "-n", clean_name, "-d"])
 
-        return {"success": True, "message": f"Контейнер '{clean_name}' успешно клонирован из '{name}'!"}
+        return {"success": True, "message": f"Контейнер '{clean_name}' (IP: {new_ip}, MAC: {new_mac}) успешно клонирован из '{name}'!"}
     finally:
         if was_running:
             run_cmd(["lxc-start", "-n", name, "-d"])
+
+# -----------------------------------------------------------------------------
+# Scheduled Periodic Snapshots API (Cron Integration)
+# -----------------------------------------------------------------------------
+
+def load_snapshot_schedule():
+    default_cfg = {
+        "enabled": True,
+        "schedule": "daily",
+        "cron_expr": "30 3 * * *",
+        "keep_last": 7,
+        "containers": "ALL"
+    }
+    if os.path.exists(SNAPSHOT_SCHEDULE_FILE):
+        try:
+            with open(SNAPSHOT_SCHEDULE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                default_cfg.update(data)
+        except Exception:
+            pass
+    return default_cfg
+
+def sync_snapshot_crontab(cfg):
+    os.makedirs(os.path.dirname(SNAPSHOT_SCHEDULE_FILE), exist_ok=True)
+    with open(SNAPSHOT_SCHEDULE_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+    lines = []
+    if os.path.exists(CRONTAB_ROOT_FILE):
+        with open(CRONTAB_ROOT_FILE, "r", encoding="utf-8") as f:
+            lines = [ln for ln in f.readlines() if "lxc-auto-snapshot.sh" not in ln]
+
+    if cfg.get("enabled", True):
+        sched = cfg.get("schedule", "daily")
+        cron_map = {
+            "hourly": "0 * * * *",
+            "daily": "30 3 * * *",
+            "weekly": "0 4 * * 0",
+        }
+        expr = cron_map.get(sched, cfg.get("cron_expr", "30 3 * * *"))
+        lines.append(f"{expr} /usr/local/bin/lxc-auto-snapshot.sh >/dev/null 2>&1\n")
+
+    os.makedirs(os.path.dirname(CRONTAB_ROOT_FILE), exist_ok=True)
+    with open(CRONTAB_ROOT_FILE, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    run_cmd(["rc-service", "crond", "reload"])
+
+@app.route("/api/snapshots/schedule", method="GET")
+def api_get_snapshot_schedule():
+    response.content_type = "application/json"
+    return {"success": True, **load_snapshot_schedule()}
+
+@app.route("/api/snapshots/schedule", method="POST")
+def api_set_snapshot_schedule():
+    response.content_type = "application/json"
+    data = request.json or {}
+    cfg = load_snapshot_schedule()
+    cfg["enabled"] = bool(data.get("enabled", True))
+    sched = str(data.get("schedule", "daily")).strip().lower()
+    if sched not in ("hourly", "daily", "weekly"):
+        sched = "daily"
+    cfg["schedule"] = sched
+    cfg["cron_expr"] = {"hourly": "0 * * * *", "daily": "30 3 * * *", "weekly": "0 4 * * 0"}[sched]
+    try:
+        cfg["keep_last"] = max(1, min(60, int(data.get("keep_last", 7))))
+    except (ValueError, TypeError):
+        cfg["keep_last"] = 7
+    cfg["containers"] = data.get("containers", "ALL")
+    sync_snapshot_crontab(cfg)
+    return {
+        "success": True,
+        "message": f"Расписание авто-снимков сохранено ({sched}, хранить последние {cfg['keep_last']})!",
+        **cfg
+    }
+
+@app.route("/api/snapshots/run-now", method="POST")
+def api_run_scheduled_snapshots_now():
+    response.content_type = "application/json"
+    def _bg():
+        run_cmd(["/usr/local/bin/lxc-auto-snapshot.sh", "--force"], timeout=600)
+    threading.Thread(target=_bg, daemon=True).start()
+    return {"success": True, "message": "Фоновое создание периодических снимков запущено!"}
 
 # -----------------------------------------------------------------------------
 # Phase 2: 1-Click Caddy Ingress & Port Publishing

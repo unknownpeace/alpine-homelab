@@ -32,6 +32,7 @@ cat << EOF > /etc/caddy/Caddyfile
             roll_size 10mb
             roll_keep 5
         }
+        format json
         level INFO
     }
 }
@@ -47,6 +48,16 @@ cat << EOF > /etc/caddy/Caddyfile
     }
 }
 
+(access_log) {
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+        format json
+    }
+}
+
 (homelab_auth) {
     basic_auth {
         $AUTH_USER $RAW_HASH
@@ -55,6 +66,7 @@ cat << EOF > /etc/caddy/Caddyfile
 
 homelab.$BASE_DOMAIN, $IP_HOST {
     import security_headers
+    import access_log
     handle /api/proxy/update {
         import homelab_auth
         reverse_proxy 127.0.0.1:8888

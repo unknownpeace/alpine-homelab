@@ -47,7 +47,9 @@ deploy_caddy_snippet() {
         return 0
     fi
     mkdir -p /etc/caddy/conf.d
-    sed "s/__BASE_DOMAIN__/${BASE_DOMAIN:-lan}/g" "$snippet" > "/etc/caddy/conf.d/${svc}.conf"
+    sed -e "s/__BASE_DOMAIN__/${BASE_DOMAIN:-lan}/g" \
+        -e "/import security_headers/a\\    import access_log" \
+        "$snippet" > "/etc/caddy/conf.d/${svc}.conf"
     if rc-service caddy status >/dev/null 2>&1; then
         rc-service caddy reload >/dev/null 2>&1 || rc-service caddy restart >/dev/null 2>&1 || true
     fi

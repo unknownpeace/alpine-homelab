@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-# Service: LXC Sandbox Subsystem & Web Manager
+# Service: LXC Sandbox Subsystem & Web Manager 2.0 (Unified cgroups v2 + Cron Snapshots)
 
 SERVICE_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
@@ -8,13 +8,13 @@ ROOT_DIR="$(cd "$SERVICE_DIR/../.." && pwd)"
 [ -f "$ROOT_DIR/config.env" ] && . "$ROOT_DIR/config.env"
 . "$ROOT_DIR/lib/detect.sh"
 
-log_info "Deploying LXC Sandbox Subsystem and Web Manager (Bottle WSGI + ttyd)..."
+log_info "Deploying LXC Sandbox Subsystem 2.0 and Web Manager (Bottle WSGI + ttyd + cgroups v2)..."
 
 if ! command -v lxc-create >/dev/null 2>&1 || ! command -v ttyd >/dev/null 2>&1; then
     apk_add lxc lxc-openrc lxc-templates lxc-download rsync ttyd
 fi
 
-# Setup LXC Sandbox NAT bridge (10.0.3.1/24)
+# 1. Setup LXC Sandbox NAT bridge (10.0.3.1/24)
 if ! grep -q 'lxcbr0' /etc/network/interfaces; then
 cat << 'EOF' >> /etc/network/interfaces
 
@@ -27,33 +27,171 @@ EOF
 fi
 ifup lxcbr0 2>/dev/null || true
 
-# Enable and start OpenRC cgroups and lxc services
+# 2. Configure OpenRC Unified cgroups v2 and delegate CPU/Memory/PIDs/IO controllers
+if [ -f /etc/rc.conf ]; then
+    sed -i '/^#*rc_cgroup_mode=/d' /etc/rc.conf
+    sed -i '/^#*rc_cgroup_controllers=/d' /etc/rc.conf
+fi
+cat << 'EOF' >> /etc/rc.conf
+rc_cgroup_mode="unified"
+rc_cgroup_controllers="cpu cpuset memory pids io"
+EOF
+
 if ! grep -q "^root:100000:65536" /etc/subuid 2>/dev/null; then
     echo "root:100000:65536" >> /etc/subuid
 fi
 if ! grep -q "^root:100000:65536" /etc/subgid 2>/dev/null; then
     echo "root:100000:65536" >> /etc/subgid
 fi
+
 rc-update add cgroups sysinit >/dev/null 2>&1 || true
-rc-service cgroups start >/dev/null 2>&1 || true
+rc-service cgroups restart >/dev/null 2>&1 || rc-service cgroups start >/dev/null 2>&1 || true
+
+# Enable subtree_control for root cgroup v2 hierarchy so lxc.cgroup2.cpu.max & memory.max work immediately
+if [ -f /sys/fs/cgroup/cgroup.subtree_control ]; then
+    for ctrl in cpu cpuset memory pids io; do
+        echo "+$ctrl" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
+    done
+fi
+
 rc-update add lxc default >/dev/null 2>&1 || true
 rc-service lxc start >/dev/null 2>&1 || true
 
-# 1. Pre-cache Alpine minirootfs for instant 1s sandbox cloning
-mkdir -p /var/lib/lxc/cache /opt/lxc-manager
+# 3. Pre-cache Alpine minirootfs for instant 1s sandbox cloning
+mkdir -p /var/lib/lxc/cache /opt/lxc-manager /etc/lxc
 if [ ! -s /var/lib/lxc/cache/alpine-minirootfs.tar.gz ]; then
     log_info "Caching Alpine minirootfs template for instant LXC sandbox provisioning..."
     curl -fL --retry 3 --connect-timeout 15 "$MINIROOTFS_URL" -o /var/lib/lxc/cache/alpine-minirootfs.tar.gz || rm -f /var/lib/lxc/cache/alpine-minirootfs.tar.gz
 fi
 
-# 2. Deploy app.py and term-attach.sh
+# 4. Deploy app.py, term-attach.sh, and lxc-auto-snapshot.sh
 cp -f "$SERVICE_DIR/app.py" /opt/lxc-manager/app.py
 chmod +x /opt/lxc-manager/app.py
 
 cp -f "$SERVICE_DIR/term-attach.sh" /opt/lxc-manager/term-attach.sh
 chmod +x /opt/lxc-manager/term-attach.sh
 
-# 3. OpenRC service for ttyd
+cat << 'EOF' > /usr/local/bin/lxc-auto-snapshot.sh
+#!/bin/sh
+set -e
+LXC_DIR="/var/lib/lxc"
+SCHEDULE_CFG="/etc/lxc/snapshot-schedule.json"
+LOG_FILE="/var/log/lxc-snapshots.log"
+LOCK_DIR="/var/run/lxc-auto-snapshot.lock"
+
+log_msg() {
+    printf "%s [LXC-SNAP] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
+}
+
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    log_msg "WARN: Another snapshot job is already running ($LOCK_DIR). Exiting."
+    exit 0
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
+
+ENABLED="true"
+KEEP_LAST=7
+TARGETS="ALL"
+
+if [ -f "$SCHEDULE_CFG" ]; then
+    eval "$(python3 -c '
+import json, shlex
+try:
+    with open("/etc/lxc/snapshot-schedule.json", "r", encoding="utf-8") as f:
+        d = json.load(f)
+    en = "true" if d.get("enabled", True) else "false"
+    keep = int(d.get("keep_last", 7))
+    t = d.get("containers", "ALL")
+    if isinstance(t, list):
+        t = " ".join(str(x) for x in t)
+    print(f"ENABLED={shlex.quote(en)}")
+    print(f"KEEP_LAST={keep}")
+    print(f"TARGETS={shlex.quote(str(t))}")
+except Exception:
+    pass
+' 2>/dev/null)"
+fi
+
+if [ "$ENABLED" != "true" ] && [ "${1:-}" != "--force" ]; then
+    exit 0
+fi
+
+[ "$KEEP_LAST" -lt 1 ] 2>/dev/null && KEEP_LAST=7
+
+if [ "$TARGETS" = "ALL" ] || [ -z "$TARGETS" ]; then
+    CONTAINERS=$(lxc-ls -1 2>/dev/null | grep -vE '^(cache|snaps)$' || true)
+else
+    CONTAINERS="$TARGETS"
+fi
+
+[ -z "$CONTAINERS" ] && exit 0
+
+TS="$(date '+%Y-%m-%d_%H:%M')"
+COMMENT="AUTO-CRON $TS"
+
+for cname in $CONTAINERS; do
+    cdir="$LXC_DIR/$cname"
+    [ ! -f "$cdir/config" ] && continue
+
+    log_msg "INFO: Starting scheduled snapshot for '$cname' (keep_last=$KEEP_LAST)..."
+    state=$(lxc-info -n "$cname" -s 2>/dev/null | awk '{print $2}' || echo "STOPPED")
+
+    was_running=0
+    if [ "$state" = "RUNNING" ]; then
+        was_running=1
+        lxc-stop -n "$cname" -t 15 2>/dev/null || lxc-stop -n "$cname" -k 2>/dev/null || true
+    fi
+
+    comment_file="/tmp/lxc-cron-comment-${cname}-$$.txt"
+    printf "%s\n" "$COMMENT" > "$comment_file"
+
+    if lxc-snapshot -n "$cname" -c "$comment_file" >>"$LOG_FILE" 2>&1; then
+        log_msg "OK: Snapshot created for '$cname' ($COMMENT)."
+    else
+        log_msg "ERROR: lxc-snapshot failed for '$cname'."
+    fi
+    rm -f "$comment_file"
+
+    if [ "$was_running" -eq 1 ]; then
+        lxc-start -n "$cname" -d >>"$LOG_FILE" 2>&1 || log_msg "ERROR: Failed to restart '$cname'!"
+    fi
+
+    auto_snaps=$(lxc-snapshot -n "$cname" -L -C 2>/dev/null | awk '/AUTO-CRON/ {print $1}' || true)
+    total_auto=$(printf "%s\n" "$auto_snaps" | sed '/^$/d' | wc -l)
+
+    if [ "$total_auto" -gt "$KEEP_LAST" ]; then
+        del_count=$((total_auto - KEEP_LAST))
+        to_delete=$(printf "%s\n" "$auto_snaps" | sed '/^$/d' | head -n "$del_count")
+        for sname in $to_delete; do
+            lxc-snapshot -n "$cname" -d "$sname" >>"$LOG_FILE" 2>&1 && \
+                log_msg "PRUNE: Removed expired auto-snapshot '$sname' from '$cname'." || true
+        done
+    fi
+done
+EOF
+chmod +x /usr/local/bin/lxc-auto-snapshot.sh
+
+# Initialize default schedule config and cron job (daily at 03:30)
+if [ ! -f /etc/lxc/snapshot-schedule.json ]; then
+cat << 'EOF' > /etc/lxc/snapshot-schedule.json
+{
+  "enabled": true,
+  "schedule": "daily",
+  "cron_expr": "30 3 * * *",
+  "keep_last": 7,
+  "containers": "ALL"
+}
+EOF
+fi
+
+mkdir -p /etc/crontabs
+touch /etc/crontabs/root
+sed -i '/lxc-auto-snapshot\.sh/d' /etc/crontabs/root
+echo "30 3 * * * /usr/local/bin/lxc-auto-snapshot.sh >/dev/null 2>&1" >> /etc/crontabs/root
+rc-update add crond default >/dev/null 2>&1 || true
+rc-service crond restart >/dev/null 2>&1 || true
+
+# 5. OpenRC service for ttyd (with respawn_period=60)
 cat << 'EOF' > /etc/init.d/ttyd
 #!/sbin/openrc-run
 name="ttyd"
@@ -65,8 +203,9 @@ command_user="root"
 directory="/opt/lxc-manager"
 output_log="/var/log/ttyd.log"
 error_log="/var/log/ttyd.log"
-respawn_delay=2
-respawn_max=5
+respawn_delay=3
+respawn_max=10
+respawn_period=60
 
 depend() {
     need net lxc
@@ -77,19 +216,20 @@ chmod +x /etc/init.d/ttyd
 rc-update add ttyd default >/dev/null 2>&1 || true
 rc-service ttyd restart >/dev/null 2>&1 || true
 
-# 4. OpenRC service for lxc-manager
+# 6. OpenRC service for lxc-manager (with respawn_period=60)
 cat << 'EOF' > /etc/init.d/lxc-manager
 #!/sbin/openrc-run
 name="lxc-manager"
-description="LXC Sandbox Web Manager"
+description="LXC Sandbox Web Manager 2.0"
 supervisor="supervise-daemon"
 command="/usr/bin/python3"
 command_args="/opt/lxc-manager/app.py"
 directory="/opt/lxc-manager"
 output_log="/var/log/lxc-manager.log"
 error_log="/var/log/lxc-manager.err"
-respawn_delay=2
-respawn_max=5
+respawn_delay=3
+respawn_max=10
+respawn_period=60
 
 depend() {
     need net lxc
@@ -97,9 +237,10 @@ depend() {
 }
 EOF
 chmod +x /etc/init.d/lxc-manager
+cp -f /etc/init.d/lxc-manager "$SERVICE_DIR/lxc-manager.initd" 2>/dev/null || true
 rc-update add lxc-manager default >/dev/null 2>&1 || true
 rc-service lxc-manager restart >/dev/null 2>&1 || true
 
 deploy_caddy_snippet "lxc-manager"
 
-log_success "LXC Sandbox Manager and ttyd Web Terminal deployed on https://lxc.$BASE_DOMAIN"
+log_success "LXC Sandbox Manager 2.0 deployed on https://lxc.$BASE_DOMAIN (cgroups v2 unified + cron snapshots active)"

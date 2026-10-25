@@ -38,7 +38,8 @@ usage() {
     echo "  install            Run complete modular deployment (core + enabled services)"
     echo "  reconfigure        Re-run setup wizard to change services, passwords, or proxy"
     echo "  update             Pull git updates, refresh rules, and restart services"
-    echo "  doctor             Run full automated system health & diagnostics audit"
+    echo "  doctor             Run full automated system health & diagnostics audit
+  watchdog           Run proactive healthcheck, auto-heal & alert check now"
     echo "  status             Show quick summary of running services and resources"
     echo "  backup [dir]       Create atomic disaster recovery backup of DBs & configs"
     echo "  restore <file>     Restore full homelab state from a backup archive"
@@ -79,6 +80,8 @@ cmd_install() {
     sh "$CORE_DIR/03-network.sh"
     sh "$CORE_DIR/04-storage.sh"
     sh "$CORE_DIR/05-firewall.sh"
+    [ -f "$CORE_DIR/06-watchdog.sh" ] && sh "$CORE_DIR/06-watchdog.sh"
+    ln -sf "$ROOT_DIR/homelab.sh" /usr/local/bin/homelab 2>/dev/null || true
 
     # Execute Services based on ENABLE_* flags
     log_info ">>> Phase 2: Homelab Services Deployment <<<"
@@ -283,6 +286,15 @@ cmd_doctor() {
             issues=$((issues + 1))
         fi
     done
+
+    echo ""
+    echo -e "${C_WHITE}Checking Zero-Trust nftables Dynamic Brute-Force Sets:${C_RESET}"
+    if nft list set inet homelab ssh_banlist >/dev/null 2>&1 && nft list set inet homelab web_banlist >/dev/null 2>&1; then
+        echo -e "  [${C_GREEN}PASS${C_RESET}] nftables dynamic sets (@ssh_banlist, @web_banlist) are active"
+    else
+        echo -e "  [${C_RED}FAIL${C_RESET}] nftables dynamic brute-force sets are missing"
+        issues=$((issues + 1))
+    fi
 
     echo ""
     echo -e "${C_WHITE}Checking DNS Resolution (port 53):${C_RESET}"
@@ -825,6 +837,11 @@ case "$CMD" in
         ;;
     doctor)
         cmd_doctor "$@"
+        ;;
+    watchdog)
+        check_root
+        /usr/local/bin/homelab-watchdog.sh
+        cat /var/run/homelab-health.json 2>/dev/null || true
         ;;
     status)
         cmd_status "$@"
