@@ -33,7 +33,7 @@
 | **Transmission** | Торрент-клиент | `https://torrent.lan/` | `127.0.0.1:9091` | `admin` / пароль из мастера |
 | **Media Downloader** | Загрузчик видео/аудио (yt-dlp) | `https://ytdl.lan/` | `127.0.0.1:8080` | `admin` / пароль из мастера |
 | **Samba / WSDD** | Сетевые папки Windows/Mac | `\\IP_HOST\Storage` | `445, 139, 3702` | `admin` / пароль из мастера |
-| **AdGuard Home** | Визуальный DNS-щит & статистика | `https://adguard.lan` | `127.0.0.1:3001` (DNS: 53) | Опционально (`ENABLE_ADGUARD_HOME`) |
+| **AdGuard Home** | Визуальный DNS-щит & статистика | `https://adguard.lan` | `127.0.0.1:3001` (DNS: 53) | `admin` / пароль из мастера |
 
 ---
 

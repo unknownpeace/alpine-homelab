@@ -134,7 +134,7 @@ cmd_summary() {
     [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && sb_dns_info="5353 (upstream)"
     [ "${ENABLE_SINGBOX:-yes}" = "yes" ]     && echo -e "  sing-box UI/DNS : ${C_CYAN}https://proxy.$BASE_DOMAIN/ui/${C_RESET}    127.0.0.1:9090 (DNS: $sb_dns_info) ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}"
     [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && echo -e "  LXC Sandbox Mgr : ${C_CYAN}https://lxc.$BASE_DOMAIN${C_RESET}          127.0.0.1:8888, 7681     ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}  (LAN DHCP, Snapshots, ttyd)"
-    [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && echo -e "  AdGuard Home    : ${C_CYAN}https://adguard.$BASE_DOMAIN${C_RESET}      127.0.0.1:3001 (DNS: 53) Регистрация первой учетки"
+    [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && echo -e "  AdGuard Home    : ${C_CYAN}https://adguard.$BASE_DOMAIN${C_RESET}      127.0.0.1:3001 (DNS: 53) ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}"
     echo ""
     if [ "${ENABLE_SAMBA:-yes}" = "yes" ]; then
         echo -e "${C_PURPLE}${C_BOLD}4. СЕТЕВЫЕ ПАПКИ SAMBA (Проводник Windows):${C_RESET}"

@@ -16,6 +16,16 @@ fi
 
 mkdir -p /etc/adguardhome /var/lib/adguardhome
 
+AUTH_USER="${AUTH_USER:-admin}"
+AUTH_PASS="${AUTH_PASS:-admin}"
+
+PASS_HASH=""
+if command -v caddy >/dev/null 2>&1; then
+    PASS_HASH=$(caddy hash-password --plaintext "$AUTH_PASS" 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+    PASS_HASH=$(python3 -c "import crypt; print(crypt.crypt('$AUTH_PASS', crypt.mksalt(crypt.METHOD_BLOWFISH)))" 2>/dev/null || true)
+fi
+
 # Generate AdGuardHome.yaml if not present
 AGH_CONFIG="/var/lib/adguardhome/AdGuardHome.yaml"
 if [ ! -f "$AGH_CONFIG" ]; then
@@ -27,7 +37,15 @@ http:
     enabled: false
   address: 127.0.0.1:3001
   session_ttl: 720h
-users: []
+users:
+EOF
+    if [ -n "$PASS_HASH" ]; then
+        cat << EOF >> "$AGH_CONFIG"
+  - name: $AUTH_USER
+    password: $PASS_HASH
+EOF
+    fi
+    cat << EOF >> "$AGH_CONFIG"
 auth_attempts: 5
 block_auth_min: 15
 http_proxy: ""
@@ -123,6 +141,21 @@ os:
 schema_version: 34
 EOF
     ln -sf "$AGH_CONFIG" /etc/adguardhome/AdGuardHome.yaml 2>/dev/null || true
+fi
+
+# Ensure admin credentials are set if users list is empty
+if [ -f "$AGH_CONFIG" ] && grep -q "users: \[\]" "$AGH_CONFIG" && [ -n "$PASS_HASH" ]; then
+    log_info "Securing AdGuard Home: registering $AUTH_USER credentials..."
+    python3 -c "
+path = '$AGH_CONFIG'
+with open(path) as f:
+    text = f.read()
+if 'users: []' in text:
+    user_yaml = 'users:\n  - name: $AUTH_USER\n    password: $PASS_HASH'
+    text = text.replace('users: []', user_yaml)
+    with open(path, 'w') as f:
+        f.write(text)
+" 2>/dev/null || true
 fi
 
 chown -R adguardhome:adguardhome /var/lib/adguardhome /etc/adguardhome 2>/dev/null || true
