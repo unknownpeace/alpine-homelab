@@ -3,11 +3,14 @@
 LXC Sandbox Web Manager for Alpine Linux
 Ultra-lightweight native WSGI application built with Bottle.
 Manages isolated test/sandbox containers alongside bare-metal services.
-Supports:
-  - Official LinuxContainers catalog (Alpine, Debian, Ubuntu, Arch, Fedora, Rocky)
+Features:
+  - Live synchronization with official LinuxContainers catalog (images.linuxcontainers.org)
+  - Full support for Kali Linux, Debian, Ubuntu, Alpine, Arch, Fedora, Rocky, AlmaLinux, etc.
+  - Fully responsive mobile & desktop UI (touch cards on mobile, expansive table on desktop)
   - Home network LAN mode (br0 with DHCP from router) & NAT Sandbox (lxcbr0)
   - Snapshots and Rollback (lxc-snapshot)
-  - Interactive Web Terminal (ttyd / xterm.js via WebSocket)
+  - Interactive Web Terminal (ttyd / xterm.js via WebSocket) with Fullscreen Mode
+  - Quick command execution via lxc-attach
 """
 
 import os
@@ -16,7 +19,10 @@ import re
 import json
 import time
 import shutil
+import platform
+import threading
 import subprocess
+import urllib.request
 from bottle import Bottle, request, response, static_file, abort
 
 app = Bottle()
@@ -24,64 +30,35 @@ app = Bottle()
 LXC_DIR = "/var/lib/lxc"
 CACHE_DIR = "/var/cache/lxc"
 MINIROOTFS_CACHE = os.path.join(LXC_DIR, "cache", "alpine-minirootfs.tar.gz")
+CATALOG_CACHE_FILE = os.path.join(LXC_DIR, "cache", "upstream-catalog.json")
 
-DISTRO_CATALOG = {
-    "alpine": {
-        "name": "Alpine Linux (Ultra-light, ~270 KB RAM)",
-        "releases": [
-            {"id": "3.24", "name": "3.24 (Current Stable - Recommended)"},
-            {"id": "3.23", "name": "3.23"},
-            {"id": "3.22", "name": "3.22"},
-            {"id": "3.21", "name": "3.21"},
-            {"id": "edge", "name": "edge (Rolling release)"}
-        ]
-    },
-    "debian": {
-        "name": "Debian GNU/Linux (apt / glibc, ~1.5 MB RAM)",
-        "releases": [
-            {"id": "bookworm", "name": "12 Bookworm (Stable - Recommended)"},
-            {"id": "trixie", "name": "13 Trixie (Testing)"},
-            {"id": "bullseye", "name": "11 Bullseye (Oldstable)"},
-            {"id": "sid", "name": "sid (Unstable)"}
-        ]
-    },
-    "ubuntu": {
-        "name": "Ubuntu Linux (Canonical LTS)",
-        "releases": [
-            {"id": "noble", "name": "24.04 LTS Noble Numbat (Latest LTS)"},
-            {"id": "jammy", "name": "22.04 LTS Jammy Jellyfish"},
-            {"id": "focal", "name": "20.04 LTS Focal Fossa"}
-        ]
-    },
-    "archlinux": {
-        "name": "Arch Linux (Rolling, bleeding-edge)",
-        "releases": [
-            {"id": "current", "name": "current (Daily Rolling Release)"}
-        ]
-    },
-    "fedora": {
-        "name": "Fedora Linux",
-        "releases": [
-            {"id": "41", "name": "41 (Latest)"},
-            {"id": "40", "name": "40"},
-            {"id": "39", "name": "39"}
-        ]
-    },
-    "rockylinux": {
-        "name": "Rocky Linux (RHEL Enterprise Compatible)",
-        "releases": [
-            {"id": "9", "name": "9 (Enterprise 9)"},
-            {"id": "8", "name": "8 (Enterprise 8)"}
-        ]
-    },
-    "almalinux": {
-        "name": "AlmaLinux (RHEL Enterprise Compatible)",
-        "releases": [
-            {"id": "10", "name": "10"},
-            {"id": "9", "name": "9"},
-            {"id": "8", "name": "8"}
-        ]
-    }
+UPSTREAM_INDEX_URL = "https://images.linuxcontainers.org/meta/1.0/index-system"
+FALLBACK_INDEX_URL = "https://uk.images.linuxcontainers.org/meta/1.0/index-system"
+
+DISTRO_METADATA = {
+    "alpine": {"name": "Alpine Linux (Ultra-light, ~270 KB RAM)", "priority": 1, "icon": "⚡"},
+    "kali": {"name": "Kali Linux (Penetration Testing & Security)", "priority": 2, "icon": "🐉"},
+    "debian": {"name": "Debian GNU/Linux (Стабильный / apt)", "priority": 3, "icon": "🌀"},
+    "ubuntu": {"name": "Ubuntu Linux (Canonical LTS)", "priority": 4, "icon": "🐧"},
+    "archlinux": {"name": "Arch Linux (Rolling Release)", "priority": 5, "icon": "🏹"},
+    "fedora": {"name": "Fedora Linux", "priority": 6, "icon": "🎩"},
+    "rockylinux": {"name": "Rocky Linux (RHEL 9 Совместимый)", "priority": 7, "icon": "🏔️"},
+    "almalinux": {"name": "AlmaLinux (RHEL 9 Совместимый)", "priority": 8, "icon": "🔴"},
+    "voidlinux": {"name": "Void Linux (Независимый / runit)", "priority": 9, "icon": "🪐"},
+    "nixos": {"name": "NixOS (Декларативный Linux)", "priority": 10, "icon": "❄️"},
+    "openwrt": {"name": "OpenWrt (Сетевой роутер Linux)", "priority": 11, "icon": "📶"},
+    "centos": {"name": "CentOS Stream", "priority": 12, "icon": "📦"},
+    "amazonlinux": {"name": "Amazon Linux", "priority": 13, "icon": "☁️"},
+    "devuan": {"name": "Devuan GNU+Linux (sysvinit)", "priority": 14, "icon": "💎"},
+    "mint": {"name": "Linux Mint", "priority": 15, "icon": "🍃"},
+    "opensuse": {"name": "openSUSE Linux", "priority": 16, "icon": "🦎"},
+    "openeuler": {"name": "openEuler Linux", "priority": 17, "icon": "🌐"},
+    "oracle": {"name": "Oracle Linux", "priority": 18, "icon": "🏛️"},
+    "slackware": {"name": "Slackware Linux", "priority": 19, "icon": "📜"},
+    "busybox": {"name": "BusyBox Tiny Linux", "priority": 20, "icon": "🧰"},
+    "netbsd": {"name": "NetBSD", "priority": 21, "icon": "🚩"},
+    "alt": {"name": "ALT Linux", "priority": 22, "icon": "🦅"},
+    "plamo": {"name": "Plamo Linux", "priority": 23, "icon": "📦"}
 }
 
 def run_cmd(cmd, timeout=30):
@@ -92,6 +69,240 @@ def run_cmd(cmd, timeout=30):
         return -1, "", f"Command timed out after {timeout}s"
     except Exception as e:
         return -1, "", str(e)
+
+def get_target_arch():
+    mach = platform.machine().lower()
+    if mach in ["x86_64", "amd64"]:
+        return "amd64"
+    elif mach in ["aarch64", "arm64"]:
+        return "arm64"
+    elif "arm" in mach:
+        return "armhf"
+    elif mach in ["i386", "i686"]:
+        return "i386"
+    return "amd64"
+
+def get_fallback_catalog():
+    return {
+        "alpine": {
+            "name": "Alpine Linux (Ultra-light, ~270 KB RAM)",
+            "icon": "⚡",
+            "priority": 1,
+            "releases": [
+                {"id": "3.24", "name": "3.24 (Current Stable - Быстрый запуск)"},
+                {"id": "3.23", "name": "3.23"},
+                {"id": "3.22", "name": "3.22"},
+                {"id": "3.21", "name": "3.21"},
+                {"id": "edge", "name": "edge (Rolling)"}
+            ]
+        },
+        "kali": {
+            "name": "Kali Linux (Penetration Testing & Security)",
+            "icon": "🐉",
+            "priority": 2,
+            "releases": [
+                {"id": "current", "name": "current (Kali Rolling - Рекомендуется)"}
+            ]
+        },
+        "debian": {
+            "name": "Debian GNU/Linux (Стабильный / apt)",
+            "icon": "🌀",
+            "priority": 3,
+            "releases": [
+                {"id": "bookworm", "name": "12 Bookworm (Stable)"},
+                {"id": "trixie", "name": "13 Trixie (Testing)"},
+                {"id": "bullseye", "name": "11 Bullseye (Oldstable)"},
+                {"id": "sid", "name": "sid (Unstable)"}
+            ]
+        },
+        "ubuntu": {
+            "name": "Ubuntu Linux (Canonical LTS)",
+            "icon": "🐧",
+            "priority": 4,
+            "releases": [
+                {"id": "noble", "name": "24.04 LTS Noble Numbat"},
+                {"id": "jammy", "name": "22.04 LTS Jammy Jellyfish"},
+                {"id": "focal", "name": "20.04 LTS Focal Fossa"}
+            ]
+        },
+        "archlinux": {
+            "name": "Arch Linux (Rolling Release)",
+            "icon": "🏹",
+            "priority": 5,
+            "releases": [
+                {"id": "current", "name": "current (Daily Rolling)"}
+            ]
+        },
+        "fedora": {
+            "name": "Fedora Linux",
+            "icon": "🎩",
+            "priority": 6,
+            "releases": [
+                {"id": "41", "name": "41"},
+                {"id": "40", "name": "40"}
+            ]
+        },
+        "rockylinux": {
+            "name": "Rocky Linux (RHEL 9 Совместимый)",
+            "icon": "🏔️",
+            "priority": 7,
+            "releases": [
+                {"id": "9", "name": "9"},
+                {"id": "8", "name": "8"}
+            ]
+        },
+        "almalinux": {
+            "name": "AlmaLinux (RHEL 9 Совместимый)",
+            "icon": "🔴",
+            "priority": 8,
+            "releases": [
+                {"id": "9", "name": "9"},
+                {"id": "8", "name": "8"}
+            ]
+        }
+    }
+
+def fetch_upstream_catalog(force=False):
+    target_arch = get_target_arch()
+
+    # 1. Check local disk cache (valid for 6 hours unless force is requested)
+    if not force and os.path.exists(CATALOG_CACHE_FILE):
+        try:
+            mtime = os.path.getmtime(CATALOG_CACHE_FILE)
+            if (time.time() - mtime) < 21600:
+                with open(CATALOG_CACHE_FILE, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                    if cached.get("catalog") and cached.get("arch") == target_arch:
+                        return cached["catalog"], True, cached.get("updated_at", int(mtime))
+        except Exception:
+            pass
+
+    # 2. Fetch live index from images.linuxcontainers.org
+    raw_data = None
+    headers = {"User-Agent": "lxc/7.0.0"}
+    for url in [UPSTREAM_INDEX_URL, FALLBACK_INDEX_URL]:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                raw_data = resp.read().decode("utf-8", errors="ignore")
+                if raw_data and len(raw_data) > 500:
+                    break
+        except Exception:
+            continue
+
+    if not raw_data:
+        # Fallback to cached file if exists
+        if os.path.exists(CATALOG_CACHE_FILE):
+            try:
+                with open(CATALOG_CACHE_FILE, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                    return cached["catalog"], True, cached.get("updated_at", int(time.time()))
+            except Exception:
+                pass
+        return get_fallback_catalog(), False, int(time.time())
+
+    # 3. Parse semicolon records: distro;release;arch;variant;build_date;path
+    distro_releases = {}
+    for line in raw_data.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(";")
+        if len(parts) >= 6:
+            dist, rel, arch, variant, bdate, path = parts[:6]
+            if arch == target_arch and variant in ["default", "cloud"]:
+                distro_releases.setdefault(dist.lower(), set()).add(rel)
+
+    # Ensure alpine 3.24 is always in alpine releases
+    if "alpine" in distro_releases:
+        distro_releases["alpine"].add("3.24")
+    else:
+        distro_releases["alpine"] = {"3.24", "edge"}
+
+    # Ensure kali has current
+    if "kali" in distro_releases:
+        distro_releases["kali"].add("current")
+
+    # 4. Build catalog dictionary
+    catalog = {}
+    for dist, rel_set in distro_releases.items():
+        meta = DISTRO_METADATA.get(dist, {
+            "name": f"{dist.capitalize()} Linux",
+            "priority": 90,
+            "icon": "📦"
+        })
+
+        # Release sorting key
+        def release_sort_key(r):
+            # Recommended / current releases first
+            if dist == "alpine" and r == "3.24":
+                return (0, 0)
+            if dist == "kali" and r == "current":
+                return (0, 0)
+            if r in ["current", "latest", "edge", "rolling"]:
+                return (1, 0)
+            nums = re.findall(r"\d+", r)
+            if nums:
+                return (2, -int(nums[0]))
+            return (3, r)
+
+        sorted_rels = sorted(list(rel_set), key=release_sort_key)
+        rel_objs = []
+        for r in sorted_rels:
+            friendly_name = r
+            if dist == "kali" and r == "current":
+                friendly_name = "current (Kali Rolling - Рекомендуется)"
+            elif dist == "alpine" and r == "3.24":
+                friendly_name = "3.24 (Current Stable - Быстрый запуск)"
+            elif dist == "debian" and r == "bookworm":
+                friendly_name = "12 Bookworm (Stable)"
+            elif dist == "ubuntu" and r == "noble":
+                friendly_name = "24.04 LTS Noble"
+            elif dist == "archlinux" and r == "current":
+                friendly_name = "current (Rolling Daily)"
+            rel_objs.append({"id": r, "name": friendly_name})
+
+        catalog[dist] = {
+            "name": meta["name"],
+            "icon": meta.get("icon", "📦"),
+            "priority": meta.get("priority", 90),
+            "releases": rel_objs
+        }
+
+    # Sort catalog by priority then name
+    sorted_catalog = dict(sorted(catalog.items(), key=lambda item: (item[1]["priority"], item[0])))
+
+    # Cache to disk
+    try:
+        os.makedirs(os.path.dirname(CATALOG_CACHE_FILE), exist_ok=True)
+        with open(CATALOG_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "catalog": sorted_catalog,
+                "arch": target_arch,
+                "updated_at": int(time.time())
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    return sorted_catalog, False, int(time.time())
+
+def get_cached_templates():
+    cached_images = []
+    dl_cache = os.path.join(CACHE_DIR, "download")
+    if os.path.exists(dl_cache):
+        try:
+            for dist in os.listdir(dl_cache):
+                dpath = os.path.join(dl_cache, dist)
+                if os.path.isdir(dpath):
+                    for rel in os.listdir(dpath):
+                        rpath = os.path.join(dpath, rel)
+                        if os.path.isdir(rpath):
+                            cached_images.append(f"{dist}:{rel}")
+        except Exception:
+            pass
+    if os.path.exists(MINIROOTFS_CACHE):
+        cached_images.append("alpine:3.24")
+    return list(set(cached_images))
 
 def parse_container_info(name):
     code, out, _ = run_cmd(["lxc-info", "-n", name], timeout=5)
@@ -105,7 +316,7 @@ def parse_container_info(name):
         "autostart": False,
         "net_mode": "nat"
     }
-    
+
     for line in out.splitlines():
         line = line.strip()
         if line.startswith("State:"):
@@ -114,7 +325,6 @@ def parse_container_info(name):
             data["pid"] = line.split(":", 1)[1].strip()
         elif line.startswith("IP:"):
             ip_val = line.split(":", 1)[1].strip()
-            # prefer non-loopback
             if ip_val and not ip_val.startswith("127."):
                 if data["ip"] == "-":
                     data["ip"] = ip_val
@@ -237,24 +447,29 @@ def api_status():
 @app.route("/api/catalog", method="GET")
 def api_catalog():
     response.content_type = "application/json"
-    # Check what images are already cached in /var/cache/lxc/download
-    cached_images = []
-    dl_cache = os.path.join(CACHE_DIR, "download")
-    if os.path.exists(dl_cache):
-        try:
-            for dist in os.listdir(dl_cache):
-                dpath = os.path.join(dl_cache, dist)
-                if os.path.isdir(dpath):
-                    for rel in os.listdir(dpath):
-                        cached_images.append(f"{dist}:{rel}")
-        except Exception:
-            pass
-    if os.path.exists(MINIROOTFS_CACHE):
-        cached_images.append("alpine:3.24")
-
+    catalog, from_cache, updated_at = fetch_upstream_catalog(force=False)
+    cached_images = get_cached_templates()
     return {
-        "catalog": DISTRO_CATALOG,
-        "cached": list(set(cached_images))
+        "catalog": catalog,
+        "cached": cached_images,
+        "arch": get_target_arch(),
+        "total_distros": len(catalog),
+        "from_cache": from_cache,
+        "updated_at": updated_at
+    }
+
+@app.route("/api/catalog/refresh", method="POST")
+def api_catalog_refresh():
+    response.content_type = "application/json"
+    catalog, _, updated_at = fetch_upstream_catalog(force=True)
+    cached_images = get_cached_templates()
+    return {
+        "success": True,
+        "message": f"Каталог успешно синхронизирован с images.linuxcontainers.org! Найдено {len(catalog)} дистрибутивов.",
+        "catalog": catalog,
+        "cached": cached_images,
+        "total_distros": len(catalog),
+        "updated_at": updated_at
     }
 
 TEMPLATE_TASK = {
@@ -286,6 +501,7 @@ def api_template_download():
 
     def _worker():
         global TEMPLATE_TASK
+        target_arch = get_target_arch()
         try:
             if distro == "alpine" and release in ["3.24", "current", "latest"]:
                 os.makedirs(os.path.join(LXC_DIR, "cache"), exist_ok=True)
@@ -300,7 +516,7 @@ def api_template_download():
                     TEMPLATE_TASK["message"] = f"Ошибка загрузки Alpine minirootfs: {err or out}"
             else:
                 tmp_cname = f"tmpl-dl-{distro}-{release}".replace(".", "-")
-                cmd = ["lxc-create", "-n", tmp_cname, "-t", "download", "--", "-d", distro, "-r", release, "-a", "amd64"]
+                cmd = ["lxc-create", "-n", tmp_cname, "-t", "download", "--", "-d", distro, "-r", release, "-a", target_arch]
                 code, out, err = run_cmd(cmd, timeout=600)
                 run_cmd(["lxc-destroy", "-n", tmp_cname, "-f"], timeout=30)
                 if code == 0:
@@ -313,7 +529,6 @@ def api_template_download():
             TEMPLATE_TASK["status"] = "error"
             TEMPLATE_TASK["message"] = f"Исключение при загрузке: {str(ex)}"
 
-    import threading
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
     return {"success": True, "message": f"Начата фоновая загрузка шаблона {distro} {release}."}
@@ -375,20 +590,19 @@ def api_create():
     if os.path.exists(target_dir):
         return {"success": False, "error": f"Контейнер '{name}' уже существует."}
 
-    # Decide creation method: Fast Local Cache vs Official lxc-download
     rootfs_dir = os.path.join(target_dir, "rootfs")
     is_fast_clone = (distro == "alpine" and release in ["3.24", "current", "latest"] and os.path.exists(MINIROOTFS_CACHE))
+    target_arch = get_target_arch()
 
     try:
         if is_fast_clone:
-            # 1. Instant local minirootfs cloning (~1.1s)
+            # 1. Instant local minirootfs cloning (~1s)
             os.makedirs(rootfs_dir, exist_ok=True)
             code, _, err = run_cmd(["tar", "-xzf", MINIROOTFS_CACHE, "-C", rootfs_dir], timeout=30)
             if code != 0:
                 shutil.rmtree(target_dir, ignore_errors=True)
                 return {"success": False, "error": "Ошибка распаковки rootfs: " + err}
 
-            # Prepare base config
             if net_mode == "lan":
                 net_cfg = """lxc.net.0.type = veth
 lxc.net.0.flags = up
@@ -419,7 +633,6 @@ lxc.start.auto = {"1" if autostart else "0"}
             os.makedirs(etc_dir, exist_ok=True)
 
             if net_mode == "lan":
-                # Container will use router DHCP
                 net_if_dir = os.path.join(etc_dir, "network")
                 os.makedirs(net_if_dir, exist_ok=True)
                 with open(os.path.join(net_if_dir, "interfaces"), "w", encoding="utf-8") as f:
@@ -438,11 +651,11 @@ lxc.start.auto = {"1" if autostart else "0"}
                 shutil.copy2("/etc/apk/repositories", os.path.join(apk_dir, "repositories"))
 
         else:
-            # 2. Official lxc-download template from images.linuxcontainers.org
+            # 2. Official lxc-download template from images.linuxcontainers.org (Kali, Debian, Ubuntu, etc.)
             code, out, err = run_cmd([
                 "lxc-create", "-n", name, "-t", "download", "--",
-                "-d", distro, "-r", release, "-a", "amd64"
-            ], timeout=300)
+                "-d", distro, "-r", release, "-a", target_arch
+            ], timeout=360)
             if code != 0:
                 shutil.rmtree(target_dir, ignore_errors=True)
                 return {"success": False, "error": f"Ошибка создания контейнера (lxc-download): {err or out}"}
@@ -478,12 +691,19 @@ lxc.start.auto = {"1" if autostart else "0"}
                 with open(cfg_path, "w", encoding="utf-8") as f:
                     f.writelines(new_lines)
 
-            # Pre-configure network inside container if possible
-            if net_mode == "nat" and os.path.exists(rootfs_dir):
+            # Pre-configure network inside container if rootfs exists
+            if os.path.exists(rootfs_dir):
                 etc_dir = os.path.join(rootfs_dir, "etc")
                 os.makedirs(etc_dir, exist_ok=True)
-                with open(os.path.join(etc_dir, "resolv.conf"), "w", encoding="utf-8") as f:
-                    f.write("nameserver 10.0.3.1\nnameserver 1.1.1.1\n")
+                resolv_path = os.path.join(etc_dir, "resolv.conf")
+                if not os.path.exists(resolv_path) or os.path.islink(resolv_path):
+                    try:
+                        if os.path.islink(resolv_path):
+                            os.unlink(resolv_path)
+                        with open(resolv_path, "w", encoding="utf-8") as f:
+                            f.write("nameserver 10.0.3.1\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+                    except Exception:
+                        pass
 
         if start_now:
             s_code, _, s_err = run_cmd(["lxc-start", "-n", name, "-d"])
@@ -533,7 +753,6 @@ def api_action(name):
 
     elif action == "destroy":
         run_cmd(["lxc-stop", "-n", name, "-k"])
-        # Destroy all snapshots first to avoid LXC 7.0 blocking container deletion
         run_cmd(["lxc-snapshot", "-n", name, "-d", "ALL"])
         code, out, err = run_cmd(["lxc-destroy", "-n", name, "-f"])
         return {"success": code == 0, "message": "Container destroyed" if code == 0 else err}
@@ -569,7 +788,6 @@ def api_snapshots_list(name):
     response.content_type = "application/json"
     code, out, _ = run_cmd(["lxc-snapshot", "-n", name, "-L", "-C"])
     snapshots = []
-    # Output format: snap_name (path) date_time [comment]
     for line in out.splitlines():
         line = line.strip()
         if not line or line.startswith("No snapshots"):
@@ -592,7 +810,6 @@ def api_snapshots_create(name):
     data = request.json or {}
     comment = data.get("comment", "").strip() or "Snapshot created via Web UI"
 
-    # Directory backend requires container to be stopped to create a consistent rsync snapshot
     c_info = parse_container_info(name)
     was_running = (c_info.get("state") == "RUNNING")
     if was_running:
@@ -610,7 +827,7 @@ def api_snapshots_create(name):
             run_cmd(["lxc-start", "-n", name, "-d"])
 
     if code == 0:
-        return {"success": True, "message": "Snapshot created successfully!"}
+        return {"success": True, "message": "Снимок успешно создан!"}
     return {"success": False, "error": err or out}
 
 @app.route("/api/containers/<name>/snapshots/restore", method="POST")
@@ -623,7 +840,6 @@ def api_snapshots_restore(name):
     if not snap_name:
         return {"success": False, "error": "Snapshot name is required."}
 
-    # Stop container if running
     run_cmd(["lxc-stop", "-n", name, "-k"])
 
     cmd = ["lxc-snapshot", "-n", name, "-r", snap_name]
@@ -634,10 +850,9 @@ def api_snapshots_restore(name):
 
     code, out, err = run_cmd(cmd)
     if code == 0:
-        # Start container back up
         target_to_start = new_name if new_name else name
         run_cmd(["lxc-start", "-n", target_to_start, "-d"])
-        return {"success": True, "message": f"Successfully restored '{target_to_start}' from '{snap_name}'!"}
+        return {"success": True, "message": f"Контейнер '{target_to_start}' успешно откатан к снимку '{snap_name}'!"}
     return {"success": False, "error": err or out}
 
 @app.route("/api/containers/<name>/snapshots/destroy", method="POST")
@@ -651,7 +866,7 @@ def api_snapshots_destroy(name):
 
     code, out, err = run_cmd(["lxc-snapshot", "-n", name, "-d", snap_name])
     if code == 0:
-        return {"success": True, "message": f"Snapshot '{snap_name}' deleted."}
+        return {"success": True, "message": f"Снимок '{snap_name}' успешно удален."}
     return {"success": False, "error": err or out}
 
 # -----------------------------------------------------------------------------
@@ -686,13 +901,13 @@ def api_exec(name):
     }
 
 # -----------------------------------------------------------------------------
-# Modern Single-Page Dashboard UI
+# Modern Fully Responsive Single-Page Dashboard UI
 # -----------------------------------------------------------------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="ru" class="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>📦 LXC Sandbox Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -710,112 +925,137 @@ INDEX_HTML = """<!DOCTYPE html>
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap');
-        body { font-family: 'Inter', sans-serif; }
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+        /* Custom scrollbars */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        ::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 1); }
+        .fullscreen-frame {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 9999 !important;
+            max-width: 100vw !important;
+            border-radius: 0 !important;
+        }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-brand-500 selection:text-white">
 
     <!-- Top Navigation Header -->
-    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-6 py-4">
-        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+    <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-40 px-4 sm:px-6 py-3.5 sm:py-4">
+        <div class="max-w-7xl 2xl:max-w-[1700px] mx-auto flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 sm:gap-4">
+            <!-- Brand Logo & Title -->
             <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-brand-500/20">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-cyan-500 flex items-center justify-center shadow-lg shadow-brand-500/20 shrink-0">
                     <span class="text-xl">📦</span>
                 </div>
-                <div>
-                    <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                        LXC Sandbox Manager
-                        <span class="text-xs bg-brand-500/20 text-brand-400 border border-brand-500/30 px-2 py-0.5 rounded-full font-mono">Alpine 3.24</span>
+                <div class="min-w-0">
+                    <h1 class="text-lg sm:text-xl font-bold tracking-tight text-white flex items-center gap-2 flex-wrap">
+                        <span>LXC Sandbox Manager</span>
+                        <span class="text-[11px] bg-brand-500/20 text-brand-400 border border-brand-500/30 px-2 py-0.5 rounded-full font-mono">Alpine 3.24</span>
                     </h1>
-                    <p class="text-xs text-slate-400">Управление песочницей, снимками и терминалами контейнеров</p>
+                    <p class="text-[11px] sm:text-xs text-slate-400 truncate">Песочница, снимки и веб-терминалы LinuxContainers</p>
                 </div>
             </div>
 
-            <div class="flex items-center gap-3">
-                <button onclick="openTemplatesModal()" class="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-sm px-3.5 py-2 rounded-lg transition active:scale-95 shadow-sm">
-                    <span>📥</span> Шаблоны ОС
+            <!-- Action Buttons -->
+            <div class="flex items-center gap-2 sm:gap-3 self-end sm:self-center w-full sm:w-auto">
+                <button onclick="openTemplatesModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs sm:text-sm px-3 sm:px-3.5 py-2 rounded-lg transition active:scale-95 shadow-sm font-medium">
+                    <span>📥</span> <span>Шаблоны ОС</span>
                 </button>
-                <button onclick="openCreateModal()" class="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium text-sm px-4 py-2 rounded-lg shadow-md shadow-blue-600/20 transition-all active:scale-95">
-                    <span>⚡</span> Создать Sandbox
+                <button onclick="openCreateModal()" class="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-medium text-xs sm:text-sm px-3.5 sm:px-4 py-2 rounded-lg shadow-md shadow-blue-600/20 transition-all active:scale-95">
+                    <span>⚡</span> <span>Создать Sandbox</span>
                 </button>
-                <button onclick="refreshData()" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition" title="Обновить">
-                    <svg class="w-5 h-5" id="refresh-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                <button onclick="refreshData()" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition shrink-0 active:scale-95" title="Обновить статус">
+                    <svg class="w-4 h-4 sm:w-5 sm:h-5" id="refresh-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                 </button>
             </div>
         </div>
     </header>
 
     <!-- Main Content Area -->
-    <main class="max-w-7xl mx-auto w-full px-6 py-6 flex-1 space-y-6">
+    <main class="max-w-7xl 2xl:max-w-[1700px] mx-auto w-full px-4 sm:px-6 py-5 sm:py-6 flex-1 space-y-5 sm:space-y-6">
 
-        <!-- Host Metrics Bar -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <!-- Host Metrics Bar: 2 cols on mobile, 4 cols on desktop -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
             <!-- CPU Load -->
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
-                <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
-                    <span>Нагрузка CPU (1, 5, 15m)</span>
-                    <span class="text-blue-400 font-mono">LoadAvg</span>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
+                    <span>CPU Нагрузка</span>
+                    <span class="text-blue-400 font-mono text-[10px] sm:text-xs">LoadAvg</span>
                 </div>
-                <div id="stat-load" class="text-xl font-bold font-mono text-white">0.00, 0.00, 0.00</div>
-                <div class="text-xs text-slate-500 mt-1">Ядер хоста: активны</div>
+                <div id="stat-load" class="text-base sm:text-xl font-bold font-mono text-white truncate">0.00, 0.00, 0.00</div>
+                <div class="text-[10px] sm:text-xs text-slate-500 mt-1">1, 5, 15 мин</div>
             </div>
 
             <!-- Host RAM -->
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
-                <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
-                    <span>Оперативная память хоста</span>
-                    <span id="stat-ram-pct" class="text-emerald-400 font-mono">0%</span>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
+                    <span>RAM Хоста</span>
+                    <span id="stat-ram-pct" class="text-emerald-400 font-mono text-[10px] sm:text-xs">0%</span>
                 </div>
-                <div id="stat-ram-text" class="text-xl font-bold font-mono text-white">0 / 0 MB</div>
-                <div class="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div id="stat-ram-text" class="text-base sm:text-xl font-bold font-mono text-white truncate">0 / 0 MB</div>
+                <div class="w-full bg-slate-800 rounded-full h-1.5 mt-1.5 overflow-hidden">
                     <div id="stat-ram-bar" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
                 </div>
             </div>
 
             <!-- LXC Storage -->
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
-                <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
-                    <span>Диск LXC (/var/lib/lxc)</span>
-                    <span id="stat-disk-pct" class="text-cyan-400 font-mono">0%</span>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
+                    <span>Диск LXC</span>
+                    <span id="stat-disk-pct" class="text-cyan-400 font-mono text-[10px] sm:text-xs">0%</span>
                 </div>
-                <div id="stat-disk-text" class="text-xl font-bold font-mono text-white">0 / 0 GB</div>
-                <div class="w-full bg-slate-800 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div id="stat-disk-text" class="text-base sm:text-xl font-bold font-mono text-white truncate">0 / 0 GB</div>
+                <div class="w-full bg-slate-800 rounded-full h-1.5 mt-1.5 overflow-hidden">
                     <div id="stat-disk-bar" class="bg-cyan-500 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
                 </div>
             </div>
 
             <!-- Sandbox Counts -->
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
-                <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
-                    <span>Контейнеры Sandbox</span>
-                    <span class="text-purple-400 font-mono">LXC Total</span>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 sm:p-4 shadow-sm flex flex-col justify-between">
+                <div class="flex items-center justify-between text-[11px] sm:text-xs text-slate-400 mb-1.5">
+                    <span>Sandbox Контейнеры</span>
+                    <span class="text-purple-400 font-mono text-[10px] sm:text-xs">LXC</span>
                 </div>
-                <div class="flex items-baseline gap-2">
-                    <span id="stat-active" class="text-2xl font-bold text-emerald-400">0</span>
-                    <span class="text-xs text-slate-400">работает из</span>
-                    <span id="stat-total" class="text-xl font-bold text-white">0</span>
+                <div class="flex items-baseline gap-1.5">
+                    <span id="stat-active" class="text-lg sm:text-2xl font-bold text-emerald-400">0</span>
+                    <span class="text-[11px] sm:text-xs text-slate-400">работает из</span>
+                    <span id="stat-total" class="text-base sm:text-xl font-bold text-white">0</span>
                 </div>
-                <div class="text-xs text-slate-500 mt-1">Остановлено: <span id="stat-stopped">0</span></div>
+                <div class="text-[10px] sm:text-xs text-slate-500 mt-1">Остановлено: <span id="stat-stopped">0</span></div>
             </div>
         </div>
 
-        <!-- Containers Section -->
+        <!-- Containers Section: Dual View (Mobile Cards vs Desktop Table) -->
         <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
-            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+            <div class="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-800 flex items-center justify-between gap-2">
                 <div>
-                    <h2 class="font-bold text-white text-base">Тестовые контейнеры</h2>
-                    <p class="text-xs text-slate-400">Поддержка Alpine, Debian, Ubuntu, снимков (снапшотов) и веб-терминала</p>
+                    <h2 class="font-bold text-white text-sm sm:text-base flex items-center gap-2">
+                        <span>Тестовые контейнеры</span>
+                    </h2>
+                    <p class="text-[11px] sm:text-xs text-slate-400 hidden sm:block">Поддержка Kali Linux, Debian, Ubuntu, Alpine, мгновенных снимков и веб-терминала</p>
                 </div>
-                <div class="flex items-center gap-2">
-                    <span class="text-xs text-slate-400">Автообновление:</span>
-                    <button id="auto-btn" onclick="toggleAutoRefresh()" class="px-2.5 py-1 text-xs rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Вкл (4с)</button>
+                <div class="flex items-center gap-1.5 sm:gap-2">
+                    <span class="text-[11px] text-slate-400 hidden sm:inline">Автообновление:</span>
+                    <button id="auto-btn" onclick="toggleAutoRefresh()" class="px-2 sm:px-2.5 py-1 text-[11px] rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Вкл (4с)</button>
                 </div>
             </div>
 
-            <div class="overflow-x-auto">
+            <!-- 1. Mobile Cards View (< 768px) -->
+            <div id="containers-cards" class="block md:hidden divide-y divide-slate-800/80 p-3 space-y-3">
+                <div class="py-8 text-center text-slate-500 text-xs">Загрузка контейнеров...</div>
+            </div>
+
+            <!-- 2. Desktop Table View (>= 768px) -->
+            <div class="hidden md:block overflow-x-auto">
                 <table class="w-full text-left border-collapse">
                     <thead>
                         <tr class="bg-slate-950/60 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
@@ -838,22 +1078,28 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
 
         <!-- Guide Footer -->
-        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-6">
-            <h3 class="text-sm font-bold text-white mb-2 flex items-center gap-2">
+        <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-4 sm:p-6">
+            <h3 class="text-xs sm:text-sm font-bold text-white mb-2 flex items-center gap-2">
                 <span>💡</span> Возможности экосистемы LXC Sandbox
             </h3>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-400">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-slate-400">
                 <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-800/80">
-                    <div class="font-semibold text-slate-200 mb-1">🌐 Сеть LAN (DHCP) или NAT</div>
-                    Выбирайте режим LAN для получения реального IP от домашнего роутера (192.168.1.x) или режим изолированного NAT (10.0.3.x).
+                    <div class="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
+                        <span>🌐</span> Сеть LAN (DHCP) или NAT
+                    </div>
+                    Режим LAN подключает контейнер напрямую к домашнему роутеру (192.168.1.x), а NAT изолирует его в подсети 10.0.3.x.
                 </div>
                 <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-800/80">
-                    <div class="font-semibold text-slate-200 mb-1">📸 Мгновенные снимки (Rollback)</div>
-                    Фиксируйте состояние контейнера перед тестами и откатывайтесь в один клик через встроенный механизм lxc-snapshot.
+                    <div class="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
+                        <span>📸</span> Мгновенные снимки (Rollback)
+                    </div>
+                    Фиксируйте снимок системы перед экспериментами и откатывайтесь в один клик через lxc-snapshot.
                 </div>
                 <div class="p-3 bg-slate-950/40 rounded-lg border border-slate-800/80">
-                    <div class="font-semibold text-slate-200 mb-1">📟 Полноценный Web Terminal (ttyd)</div>
-                    Интерактивный шелл xterm.js прямо в браузере с поддержкой htop, цветов, стрелочек, автодополнения Tab и Ctrl+C.
+                    <div class="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
+                        <span>📟</span> Полноэкранный Web Shell (ttyd)
+                    </div>
+                    Интерактивный шелл xterm.js с поддержкой htop, цветов, стрелочек, Tab и разворотом во весь экран.
                 </div>
             </div>
         </div>
@@ -861,34 +1107,31 @@ INDEX_HTML = """<!DOCTYPE html>
     </main>
 
     <!-- Create Container Modal -->
-    <div id="create-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
-            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-                <h3 class="font-bold text-white text-lg flex items-center gap-2">
+    <div id="create-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[92vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+                <h3 class="font-bold text-white text-base sm:text-lg flex items-center gap-2">
                     <span>⚡</span> Новый Sandbox Контейнер
                 </h3>
-                <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white">&times;</button>
+                <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
             </div>
 
-            <form id="create-form" onsubmit="handleCreate(event)" class="space-y-4 text-sm">
+            <form id="create-form" onsubmit="handleCreate(event)" class="space-y-4 text-xs sm:text-sm overflow-y-auto pr-1 flex-1">
                 <div>
                     <label class="block text-xs font-medium text-slate-300 mb-1">Имя контейнера</label>
-                    <input type="text" id="new-name" required placeholder="например: test-sandbox, dev-node-1" oninput="this.value = this.value.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
-                    <p class="text-[11px] text-slate-500 mt-1">Только латинские буквы a-z, цифры и дефис (2-32 символа).</p>
+                    <input type="text" id="new-name" required placeholder="например: kali-pentest, test-sandbox, dev-node" oninput="this.value = this.value.replace(/[^a-zA-Z0-9_\\-]/g, '').toLowerCase()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+                    <p class="text-[11px] text-slate-500 mt-1">Латиница a-z, цифры и дефис (2-32 символа).</p>
                 </div>
 
                 <!-- Cascade Distro & Version Select -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                        <label class="block text-xs font-medium text-slate-300 mb-1">Дистрибутив (ОС)</label>
-                        <select id="new-distro" onchange="updateReleaseDropdown()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs">
-                            <option value="alpine">Alpine Linux (~270 KB RAM)</option>
-                            <option value="debian">Debian GNU/Linux (~1.5 MB RAM)</option>
-                            <option value="ubuntu">Ubuntu Linux (LTS)</option>
-                            <option value="archlinux">Arch Linux (Rolling)</option>
-                            <option value="fedora">Fedora Linux</option>
-                            <option value="rockylinux">Rocky Linux (RHEL 9)</option>
-                            <option value="custom">Ручной ввод...</option>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-xs font-medium text-slate-300">Дистрибутив (ОС)</label>
+                            <span id="distro-count-badge" class="text-[10px] text-brand-400 font-mono">23 ОС</span>
+                        </div>
+                        <select id="new-distro" onchange="updateReleaseDropdown()" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs truncate">
+                            <!-- Populated dynamically via JS from live catalog -->
                         </select>
                     </div>
 
@@ -899,19 +1142,8 @@ INDEX_HTML = """<!DOCTYPE html>
                         </select>
                     </div>
                 </div>
-                <div id="distro-cache-hint" class="text-xs pt-1"></div>
 
-                <!-- Custom Distro/Release fields (hidden by default) -->
-                <div id="custom-fields" class="grid grid-cols-2 gap-3 hidden p-3 bg-slate-950/60 rounded-lg border border-slate-800">
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">Имя дистрибутива</label>
-                        <input type="text" id="custom-distro-input" placeholder="kali, voidlinux, etc." class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-slate-400 mb-1">Релиз</label>
-                        <input type="text" id="custom-release-input" placeholder="current, 40, etc." class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-xs text-white">
-                    </div>
-                </div>
+                <div id="distro-cache-hint" class="text-xs pt-0.5"></div>
 
                 <!-- Network Mode Radio -->
                 <div class="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-2">
@@ -920,14 +1152,14 @@ INDEX_HTML = """<!DOCTYPE html>
                         <input type="radio" name="net_mode" value="lan" checked onchange="toggleNetModeUI()" class="mt-0.5 text-brand-600 bg-slate-900 border-slate-700 focus:ring-0">
                         <div>
                             <span class="text-xs font-medium text-slate-200">Домашняя сеть LAN (br0 - DHCP от роутера)</span>
-                            <p class="text-[11px] text-slate-400">Контейнер получит реальный домашний IP (192.168.1.X) и будет виден как отдельный ПК в роутере.</p>
+                            <p class="text-[11px] text-slate-400">Контейнер получит реальный домашний IP (192.168.1.X) и будет виден в сети как отдельный ПК.</p>
                         </div>
                     </label>
                     <label class="flex items-start gap-2.5 cursor-pointer pt-1">
                         <input type="radio" name="net_mode" value="nat" onchange="toggleNetModeUI()" class="mt-0.5 text-brand-600 bg-slate-900 border-slate-700 focus:ring-0">
                         <div>
                             <span class="text-xs font-medium text-slate-200">Изолированная песочница NAT (lxcbr0 - 10.0.3.x)</span>
-                            <p class="text-[11px] text-slate-400">Закрытый полигон за файрволом, не засоряет DHCP-таблицу домашнего роутера.</p>
+                            <p class="text-[11px] text-slate-400">Полигон за файрволом, не занимает адреса в домашнем роутере.</p>
                         </div>
                     </label>
                 </div>
@@ -944,37 +1176,61 @@ INDEX_HTML = """<!DOCTYPE html>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="new-startnow" checked class="rounded bg-slate-950 border-slate-700 text-brand-600 focus:ring-0">
-                        <span class="text-xs text-slate-300">Запустить контейнер сразу после развертывания</span>
+                        <span class="text-xs text-slate-300">Запустить контейнер сразу после создания</span>
                     </label>
                 </div>
 
                 <div id="create-progress" class="hidden p-3 bg-brand-950/40 border border-brand-500/30 rounded-xl space-y-2">
                     <div class="flex items-center gap-2 text-xs text-brand-300 font-medium">
-                        <svg class="animate-spin w-4 h-4 text-brand-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                        <span id="create-progress-text">Развертывание контейнера... Пожалуйста, подождите.</span>
+                        <svg class="animate-spin w-4 h-4 text-brand-400 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        <span id="create-progress-text">Развертывание контейнера...</span>
                     </div>
-                    <p class="text-[11px] text-slate-400">Для Alpine minirootfs создание занимает ~1 секунду. При первой загрузке других ОС (Debian, Ubuntu) скачивание образа может занять до 1-2 минут.</p>
+                    <p class="text-[11px] text-slate-400">Для кэшированных образов развертывание занимает ~1-2 сек. При первом скачивании из сети (Kali, Ubuntu) может потребоваться 1-2 минуты.</p>
                 </div>
 
-                <div class="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
-                    <button type="button" id="btn-create-cancel" onclick="closeCreateModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
-                    <button type="submit" id="btn-create-submit" class="px-5 py-2 bg-brand-600 hover:bg-brand-500 text-white font-medium rounded-lg shadow-md transition text-xs">Создать Sandbox</button>
+                <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-800 shrink-0">
+                    <button type="button" id="btn-create-cancel" onclick="closeCreateModal()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
+                    <button type="submit" id="btn-create-submit" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white font-medium rounded-lg shadow-md transition text-xs">Создать Sandbox</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- Templates Catalog Modal -->
-    <div id="templates-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
-            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-                <h3 class="font-bold text-white text-base flex items-center gap-2">
-                    <span>📥</span> Каталог Шаблонов ОС (LXC Images)
-                </h3>
-                <button onclick="closeTemplatesModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+    <!-- Templates Catalog Modal (Dynamic Live Internet Catalog) -->
+    <div id="templates-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full p-4 sm:p-6 shadow-2xl space-y-3.5 max-h-[92vh] flex flex-col">
+            <!-- Modal Header -->
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">📥</span>
+                    <div>
+                        <h3 class="font-bold text-white text-sm sm:text-base">Каталог Шаблонов ОС (LinuxContainers)</h3>
+                        <p class="text-[11px] text-slate-400 hidden sm:block">Прямая синхронизация с images.linuxcontainers.org</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="refreshUpstreamCatalog()" id="btn-catalog-refresh" class="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs transition active:scale-95" title="Синхронизировать с интернетом">
+                        <span id="cat-refresh-icon">🔄</span>
+                        <span class="hidden sm:inline">Обновить из сети</span>
+                    </button>
+                    <button onclick="closeTemplatesModal()" class="text-slate-400 hover:text-white text-2xl leading-none px-1">&times;</button>
+                </div>
             </div>
 
-            <div id="template-dl-banner" class="hidden p-3.5 bg-blue-950/40 border border-blue-500/30 rounded-xl space-y-1">
+            <!-- Search and Filter Bar -->
+            <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
+                <div class="relative flex-1">
+                    <input type="text" id="template-search" oninput="filterTemplatesCatalog()" placeholder="🔍 Поиск дистрибутива (например: kali, debian, alpine, arch, rocky)..." class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs font-mono">
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400 shrink-0 self-end sm:self-center">
+                    <span id="templates-stats-count" class="font-mono text-slate-300">23 дистрибутива</span>
+                    <span>•</span>
+                    <span id="templates-cached-count" class="font-mono text-emerald-400">0 в кэше</span>
+                </div>
+            </div>
+
+            <!-- Active Background Download Progress Banner -->
+            <div id="template-dl-banner" class="hidden p-3 bg-blue-950/40 border border-blue-500/30 rounded-xl space-y-1 shrink-0">
                 <div class="flex items-center justify-between text-xs">
                     <span id="template-dl-text" class="text-blue-300 font-medium flex items-center gap-2">
                         <svg class="animate-spin w-4 h-4 text-blue-400 inline" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
@@ -982,58 +1238,66 @@ INDEX_HTML = """<!DOCTYPE html>
                     </span>
                     <span class="px-2 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 font-mono">В процессе</span>
                 </div>
-                <p class="text-[11px] text-slate-400">Шаблон загружается в кэш хоста (/var/cache/lxc). Закрытие окна не прервет фоновую загрузку.</p>
+                <p class="text-[11px] text-slate-400">Фоновая загрузка образа в /var/cache/lxc. Окно можно закрывать, загрузка продолжится.</p>
             </div>
 
+            <!-- Distros List (Scrollable) -->
             <div class="space-y-3 overflow-y-auto flex-1 pr-1" id="templates-list-container">
-                <!-- Populated dynamically via JS -->
+                <div class="text-center py-8 text-slate-500 text-xs">Загрузка каталога из интернета...</div>
             </div>
 
-            <div class="flex items-center justify-between pt-3 border-t border-slate-800 text-xs text-slate-500">
-                <span>Кэш: <code class="text-slate-400 font-mono">/var/cache/lxc/download</code></span>
-                <button type="button" onclick="closeTemplatesModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Закрыть</button>
+            <!-- Modal Footer -->
+            <div class="flex items-center justify-between pt-3 border-t border-slate-800 text-xs text-slate-500 shrink-0">
+                <span class="truncate">Кэш: <code class="text-slate-400 font-mono text-[11px]">/var/cache/lxc/download</code></span>
+                <button type="button" onclick="closeTemplatesModal()" class="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Закрыть</button>
             </div>
         </div>
     </div>
-    <div id="snapshot-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
-            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+
+    <!-- Snapshot Management Modal -->
+    <div id="snapshot-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 shrink-0">
                 <div class="flex items-center gap-2">
                     <span class="text-xl">📸</span>
-                    <h3 class="font-bold text-white text-base">
-                        Снимки (Snapshots): <span id="snap-target-name" class="text-brand-400 font-mono">name</span>
+                    <h3 class="font-bold text-white text-sm sm:text-base">
+                        Снимки: <span id="snap-target-name" class="text-brand-400 font-mono">name</span>
                     </h3>
                 </div>
                 <button onclick="closeSnapshotModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
             </div>
 
             <!-- Create Snapshot Form -->
-            <form onsubmit="handleCreateSnapshot(event)" class="flex gap-2">
-                <input type="text" id="snap-comment-input" placeholder="Комментарий к снимку (например, перед установкой БД)..." class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs">
-                <button type="submit" id="btn-snap-create" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-xs whitespace-nowrap transition">+ Сделать снимок</button>
+            <form onsubmit="handleCreateSnapshot(event)" class="flex flex-col sm:flex-row gap-2 shrink-0">
+                <input type="text" id="snap-comment-input" placeholder="Комментарий к снимку..." class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-brand-500 text-xs">
+                <button type="submit" id="btn-snap-create" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-xs whitespace-nowrap transition active:scale-95">+ Сделать снимок</button>
             </form>
 
             <!-- Snapshots List -->
-            <div class="flex-1 overflow-y-auto space-y-2 min-h-[160px]" id="snapshots-list">
+            <div class="flex-1 overflow-y-auto space-y-2 min-h-[160px] pr-1" id="snapshots-list">
                 <div class="text-center py-8 text-slate-500 text-xs">Загрузка снимков...</div>
             </div>
         </div>
     </div>
 
-    <!-- Full Interactive Terminal Modal (ttyd) -->
-    <div id="term-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-5xl h-[85vh] shadow-2xl flex flex-col overflow-hidden">
-            <div class="flex items-center justify-between border-b border-slate-800 px-5 py-3 bg-slate-950">
-                <div class="flex items-center gap-3">
-                    <span class="text-lg">📟</span>
-                    <h3 class="font-bold text-white text-sm">
-                        Интерактивный шелл (ttyd): <span id="term-target-name" class="text-emerald-400 font-mono">name</span>
+    <!-- Full Interactive Terminal Modal (ttyd) with Fullscreen Mode -->
+    <div id="term-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 hidden">
+        <div id="term-container" class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-5xl h-[85vh] shadow-2xl flex flex-col overflow-hidden transition-all duration-300">
+            <div class="flex items-center justify-between border-b border-slate-800 px-4 sm:px-5 py-2.5 sm:py-3 bg-slate-950 shrink-0">
+                <div class="flex items-center gap-2 sm:gap-3 overflow-hidden">
+                    <span class="text-lg shrink-0">📟</span>
+                    <h3 class="font-bold text-white text-xs sm:text-sm truncate">
+                        Шелл: <span id="term-target-name" class="text-emerald-400 font-mono">name</span>
                     </h3>
-                    <span class="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono">xterm-256color</span>
+                    <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono hidden sm:inline">xterm-256color</span>
                 </div>
-                <div class="flex items-center gap-2">
-                    <button onclick="reloadTermFrame()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded transition" title="Переподключить">🔄 Перезапуск</button>
-                    <button onclick="closeTermModal()" class="text-slate-400 hover:text-white text-xl leading-none px-2">&times;</button>
+                <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                    <button onclick="toggleTermFullscreen()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 sm:px-2.5 py-1 rounded transition flex items-center gap-1" title="Во весь экран">
+                        <span id="fullscreen-icon">⛶</span>
+                        <span class="hidden sm:inline">Экран</span>
+                    </button>
+                    <button onclick="reloadTermFrame()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 sm:px-2.5 py-1 rounded transition" title="Переподключить">🔄</button>
+                    <button onclick="closeTermModal()" class="text-slate-400 hover:text-white text-xl leading-none px-1.5">&times;</button>
                 </div>
             </div>
             <div class="flex-1 bg-black relative">
@@ -1043,66 +1307,68 @@ INDEX_HTML = """<!DOCTYPE html>
     </div>
 
     <!-- Quick Exec Modal -->
-    <div id="exec-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 shadow-2xl flex flex-col max-h-[90vh]">
-            <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
-                <div class="flex items-center gap-3">
+    <div id="exec-modal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-4 sm:p-6 shadow-2xl flex flex-col max-h-[90vh]">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-3 shrink-0">
+                <div class="flex items-center gap-2 sm:gap-3">
                     <span class="text-xl">💻</span>
                     <div>
-                        <h3 class="font-bold text-white text-base flex items-center gap-2">
-                            Быстрый запуск команд: <span id="exec-target-name" class="text-brand-400 font-mono">name</span>
+                        <h3 class="font-bold text-white text-sm sm:text-base flex items-center gap-2">
+                            Команды: <span id="exec-target-name" class="text-brand-400 font-mono">name</span>
                         </h3>
-                        <p class="text-xs text-slate-400">Выполнение команд через lxc-attach с захватом вывода</p>
+                        <p class="text-[11px] text-slate-400 hidden sm:block">Выполнение команд через lxc-attach с захватом вывода</p>
                     </div>
                 </div>
                 <button onclick="closeExecModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
             </div>
 
-            <div class="flex flex-wrap items-center gap-2 mb-3">
-                <span class="text-xs text-slate-500">Быстрые:</span>
-                <button onclick="setExecCmd('uname -a')" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 font-mono">uname -a</button>
-                <button onclick="setExecCmd('ip a')" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 font-mono">ip a</button>
-                <button onclick="setExecCmd('ps aux')" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 font-mono">ps aux</button>
-                <button onclick="setExecCmd('df -h')" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 font-mono">df -h</button>
-                <button onclick="setExecCmd('ping -c 2 1.1.1.1')" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 font-mono">ping 1.1.1.1</button>
+            <div class="flex flex-wrap items-center gap-1.5 mb-2.5 shrink-0">
+                <span class="text-[11px] text-slate-500">Быстрые:</span>
+                <button onclick="setExecCmd('uname -a')" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 font-mono">uname -a</button>
+                <button onclick="setExecCmd('ip a')" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 font-mono">ip a</button>
+                <button onclick="setExecCmd('cat /etc/os-release')" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 font-mono">os-release</button>
+                <button onclick="setExecCmd('df -h')" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 font-mono">df -h</button>
+                <button onclick="setExecCmd('ping -c 2 1.1.1.1')" class="text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 font-mono">ping 1.1.1.1</button>
             </div>
 
-            <div class="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs overflow-y-auto min-h-[240px] text-slate-200" id="exec-output">
+            <div class="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3.5 font-mono text-xs overflow-y-auto min-h-[200px] text-slate-200" id="exec-output">
                 <span class="text-slate-500">// Введите команду и нажмите Enter для выполнения...</span>
             </div>
 
-            <form id="exec-form" onsubmit="handleExec(event)" class="mt-4 flex gap-2">
+            <form id="exec-form" onsubmit="handleExec(event)" class="mt-3 flex gap-2 shrink-0">
                 <div class="relative flex-1">
                     <span class="absolute left-3 top-2.5 text-emerald-400 font-mono font-bold">$</span>
-                    <input type="text" id="exec-input" placeholder="например: apt update || apk update" required class="w-full bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-sm">
+                    <input type="text" id="exec-input" placeholder="apt update || apk update" required class="w-full bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-3 py-2 text-white focus:outline-none focus:border-brand-500 font-mono text-xs sm:text-sm">
                 </div>
-                <button type="submit" id="btn-exec-run" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg text-sm transition">Выполнить</button>
-                <button type="button" onclick="clearExecOutput()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg text-sm">Очистить</button>
+                <button type="submit" id="btn-exec-run" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg text-xs sm:text-sm transition shrink-0">Выполнить</button>
+                <button type="button" onclick="clearExecOutput()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg text-xs sm:text-sm shrink-0">Очистить</button>
             </form>
         </div>
     </div>
 
     <!-- Notification Toast Container -->
-    <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2"></div>
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm w-full pointer-events-none px-2"></div>
 
     <script>
         let autoRefreshInterval = null;
         let activeExecTarget = '';
         let activeSnapshotTarget = '';
         let activeTermTarget = '';
+        let isTermFullscreen = false;
         let catalogData = {};
         let cachedImagesList = [];
+        let templatePollTimer = null;
 
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
             const colors = {
-                success: 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200',
-                error: 'bg-rose-950/90 border-rose-500/50 text-rose-200',
-                info: 'bg-slate-900/90 border-slate-700 text-slate-200'
+                success: 'bg-emerald-950/95 border-emerald-500/50 text-emerald-200',
+                error: 'bg-rose-950/95 border-rose-500/50 text-rose-200',
+                info: 'bg-slate-900/95 border-slate-700 text-slate-200'
             };
-            toast.className = `border px-4 py-3 rounded-xl shadow-xl text-xs backdrop-blur flex items-center gap-2 transition-all duration-300 transform translate-y-2 opacity-0 ${colors[type] || colors.info}`;
-            toast.innerHTML = `<span>${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span> <span>${escapeHtml(message)}</span>`;
+            toast.className = `border px-4 py-3 rounded-xl shadow-2xl text-xs backdrop-blur flex items-center gap-2 pointer-events-auto transition-all duration-300 transform translate-y-2 opacity-0 ${colors[type] || colors.info}`;
+            toast.innerHTML = `<span class="shrink-0">${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span> <span class="break-words">${escapeHtml(message)}</span>`;
             container.appendChild(toast);
             setTimeout(() => { toast.classList.remove('translate-y-2', 'opacity-0'); }, 10);
             setTimeout(() => {
@@ -1118,37 +1384,87 @@ INDEX_HTML = """<!DOCTYPE html>
                 const d = await res.json();
                 catalogData = d.catalog || {};
                 cachedImagesList = d.cached || [];
+                populateDistroDropdown();
                 updateReleaseDropdown();
+                updateCatalogStats();
             } catch (e) {
                 console.error(e);
+            }
+        }
+
+        async function refreshUpstreamCatalog() {
+            const icon = document.getElementById('cat-refresh-icon');
+            const btn = document.getElementById('btn-catalog-refresh');
+            if (icon) icon.classList.add('animate-spin');
+            if (btn) btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/catalog/refresh', { method: 'POST' });
+                const d = await res.json();
+                if (d.success) {
+                    catalogData = d.catalog || {};
+                    cachedImagesList = d.cached || [];
+                    populateDistroDropdown();
+                    updateReleaseDropdown();
+                    updateCatalogStats();
+                    renderTemplatesCatalog();
+                    showToast(d.message, 'success');
+                } else {
+                    showToast(d.error || 'Ошибка синхронизации', 'error');
+                }
+            } catch (err) {
+                showToast(`Ошибка сети: ${err.message}`, 'error');
+            } finally {
+                if (icon) icon.classList.remove('animate-spin');
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function updateCatalogStats() {
+            const distCount = Object.keys(catalogData).length;
+            const cachedCount = cachedImagesList.length;
+            const bBadge = document.getElementById('distro-count-badge');
+            if (bBadge) bBadge.innerText = `${distCount} ОС`;
+            const statsCount = document.getElementById('templates-stats-count');
+            if (statsCount) statsCount.innerText = `${distCount} дистрибутивов`;
+            const statsCached = document.getElementById('templates-cached-count');
+            if (statsCached) statsCached.innerText = `${cachedCount} в кэше`;
+        }
+
+        function populateDistroDropdown() {
+            const distroSelect = document.getElementById('new-distro');
+            if (!distroSelect) return;
+            const currentVal = distroSelect.value;
+            let html = '';
+
+            for (const [key, item] of Object.entries(catalogData)) {
+                const icon = item.icon || '📦';
+                html += `<option value="${key}">${icon} ${item.name}</option>`;
+            }
+            distroSelect.innerHTML = html;
+            if (currentVal && catalogData[currentVal]) {
+                distroSelect.value = currentVal;
+            } else if (catalogData['alpine']) {
+                distroSelect.value = 'alpine';
             }
         }
 
         function updateReleaseDropdown() {
             const distroSelect = document.getElementById('new-distro');
             const releaseSelect = document.getElementById('new-release');
-            const customFields = document.getElementById('custom-fields');
+            if (!distroSelect || !releaseSelect) return;
             const chosen = distroSelect.value;
-
-            if (chosen === 'custom') {
-                customFields.classList.remove('hidden');
-                releaseSelect.parentElement.classList.add('hidden');
-                return;
-            } else {
-                customFields.classList.add('hidden');
-                releaseSelect.parentElement.classList.remove('hidden');
-            }
-
             const item = catalogData[chosen];
-            if (!item || !item.releases) {
-                releaseSelect.innerHTML = '<option value="default">default</option>';
+
+            if (!item || !item.releases || item.releases.length === 0) {
+                releaseSelect.innerHTML = '<option value="current">current</option>';
                 return;
             }
 
             let html = '';
             for (const r of item.releases) {
                 const isCached = cachedImagesList.includes(`${chosen}:${r.id}`);
-                const cacheBadge = isCached ? ' ⚡ [кэширован]' : '';
+                const cacheBadge = isCached ? ' ⚡ [в кэше]' : '';
                 html += `<option value="${r.id}">${r.name}${cacheBadge}</option>`;
             }
             releaseSelect.innerHTML = html;
@@ -1160,10 +1476,7 @@ INDEX_HTML = """<!DOCTYPE html>
             const release = document.getElementById('new-release').value;
             const hint = document.getElementById('distro-cache-hint');
             if (!hint) return;
-            if (distro === 'custom') {
-                hint.innerHTML = '<span class="text-amber-400">⚠️ Произвольный образ — будет скачан из репозитория images.linuxcontainers.org</span>';
-                return;
-            }
+
             const isCached = cachedImagesList.includes(`${distro}:${release}`);
             if (isCached) {
                 hint.innerHTML = '<span class="text-emerald-400 font-medium flex items-center gap-1">⚡ Шаблон в кэше — создание песочницы займет ~1-2 сек</span>';
@@ -1171,8 +1484,6 @@ INDEX_HTML = """<!DOCTYPE html>
                 hint.innerHTML = `<span class="text-slate-400">📥 Шаблон не в кэше — будет скачан при создании (~1-2 мин). <a href="javascript:void(0)" onclick="closeCreateModal(); openTemplatesModal();" class="text-blue-400 underline hover:text-blue-300">Открыть менеджер шаблонов</a></span>`;
             }
         }
-
-        let templatePollTimer = null;
 
         function openTemplatesModal() {
             renderTemplatesCatalog();
@@ -1188,38 +1499,72 @@ INDEX_HTML = """<!DOCTYPE html>
             }
         }
 
+        function filterTemplatesCatalog() {
+            renderTemplatesCatalog();
+        }
+
         function renderTemplatesCatalog() {
             const container = document.getElementById('templates-list-container');
             if (!container) return;
+            const searchInput = document.getElementById('template-search');
+            const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
             let html = '';
+            let matchedDistros = 0;
+
             for (const [distKey, dist] of Object.entries(catalogData)) {
+                // Filter logic: matches distro key, distro name, or any release name
+                const keyMatch = distKey.toLowerCase().includes(query);
+                const nameMatch = (dist.name || '').toLowerCase().includes(query);
+                const releaseMatch = (dist.releases || []).some(r => (r.id + ' ' + (r.name || '')).toLowerCase().includes(query));
+
+                if (query && !keyMatch && !nameMatch && !releaseMatch) {
+                    continue;
+                }
+
+                matchedDistros++;
+                const icon = dist.icon || '📦';
                 html += `
-                <div class="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2">
+                <div class="p-3 sm:p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2">
                     <div class="flex items-center justify-between">
-                        <span class="font-semibold text-white text-sm">${escapeHtml(dist.name)}</span>
-                        <span class="text-xs text-slate-500 font-mono">${escapeHtml(distKey)}</span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-lg">${icon}</span>
+                            <span class="font-semibold text-white text-xs sm:text-sm">${escapeHtml(dist.name)}</span>
+                        </div>
+                        <span class="text-[11px] text-slate-500 font-mono px-2 py-0.5 bg-slate-900 rounded">${escapeHtml(distKey)}</span>
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">`;
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-1">`;
+
                 for (const r of (dist.releases || [])) {
                     const tag = `${distKey}:${r.id}`;
                     const isCached = cachedImagesList.includes(tag);
                     html += `
                         <div class="flex items-center justify-between p-2 bg-slate-900 border border-slate-800/80 rounded-lg text-xs">
-                            <div class="flex items-center gap-2 overflow-hidden">
+                            <div class="flex items-center gap-1.5 overflow-hidden min-w-0">
                                 <span class="font-medium text-slate-300 truncate">${escapeHtml(r.name || r.id)}</span>
-                                ${isCached ? '<span class="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded font-mono shrink-0">⚡ В кэше</span>' : '<span class="text-[10px] text-slate-500 shrink-0">Не скачан</span>'}
+                                ${isCached ? '<span class="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1 py-0.5 rounded font-mono shrink-0">⚡ В кэше</span>' : ''}
                             </div>
-                            <div class="shrink-0 ml-2">
+                            <div class="shrink-0 ml-1.5">
                                 ${isCached ? `
-                                    <button onclick="deleteTemplate('${escapeHtml(distKey)}', '${escapeHtml(r.id)}')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded border border-rose-800/40 text-[11px]" title="Удалить из кэша">🗑️</button>
+                                    <button onclick="deleteTemplate('${escapeHtml(distKey)}', '${escapeHtml(r.id)}')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded border border-rose-800/40 text-[11px] transition active:scale-95" title="Удалить из кэша">🗑️</button>
                                 ` : `
-                                    <button onclick="downloadTemplate('${escapeHtml(distKey)}', '${escapeHtml(r.id)}')" class="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px] font-medium transition flex items-center gap-1 shadow-sm">📥 Скачать</button>
+                                    <button onclick="downloadTemplate('${escapeHtml(distKey)}', '${escapeHtml(r.id)}')" class="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px] font-medium transition active:scale-95 flex items-center gap-1 shadow-sm">📥 Скачать</button>
                                 `}
                             </div>
                         </div>`;
                 }
                 html += `</div></div>`;
             }
+
+            if (matchedDistros === 0) {
+                html = `
+                    <div class="text-center py-12 text-slate-500">
+                        <div class="text-3xl mb-2">🔍</div>
+                        <div class="text-slate-300 font-medium">Ничего не найдено по запросу "${escapeHtml(query)}"</div>
+                        <div class="text-xs text-slate-500 mt-1">Попробуйте ввести 'kali', 'debian', 'alpine' или 'ubuntu'</div>
+                    </div>`;
+            }
+
             container.innerHTML = html;
         }
 
@@ -1272,7 +1617,7 @@ INDEX_HTML = """<!DOCTYPE html>
                 const text = document.getElementById('template-dl-text');
                 if (d.status === 'running') {
                     if (banner) banner.classList.remove('hidden');
-                    if (text) text.innerHTML = `<svg class="animate-spin w-4 h-4 text-blue-400 inline mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>${escapeHtml(d.message)}`;
+                    if (text) text.innerHTML = `<svg class="animate-spin w-4 h-4 text-blue-400 inline mr-2 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>${escapeHtml(d.message)}`;
                     if (!templatePollTimer) {
                         templatePollTimer = setInterval(pollTemplateStatus, 2000);
                     }
@@ -1342,19 +1687,23 @@ INDEX_HTML = """<!DOCTYPE html>
 
         function renderContainers(containers) {
             const tbody = document.getElementById('containers-table');
+            const cardsContainer = document.getElementById('containers-cards');
+
             if (!containers || containers.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="7" class="py-12 text-center text-slate-500">
-                            <div class="text-3xl mb-2">📦</div>
-                            <div class="text-slate-300 font-medium">Нет созданных Sandbox контейнеров</div>
-                            <div class="text-xs text-slate-500 mt-1">Нажмите «Создать Sandbox» для быстрого запуска тестового окружения</div>
-                        </td>
-                    </tr>`;
+                const emptyHtml = `
+                    <div class="py-10 text-center text-slate-500">
+                        <div class="text-3xl mb-2">📦</div>
+                        <div class="text-slate-300 font-medium">Нет созданных Sandbox контейнеров</div>
+                        <div class="text-xs text-slate-500 mt-1">Нажмите «Создать Sandbox» для запуска тестового окружения</div>
+                    </div>`;
+                if (tbody) tbody.innerHTML = `<tr><td colspan="7">${emptyHtml}</td></tr>`;
+                if (cardsContainer) cardsContainer.innerHTML = emptyHtml;
                 return;
             }
 
-            let html = '';
+            let tableHtml = '';
+            let cardsHtml = '';
+
             for (const c of containers) {
                 const isRunning = c.state === 'RUNNING';
                 const isFrozen = c.state === 'FROZEN';
@@ -1366,7 +1715,8 @@ INDEX_HTML = """<!DOCTYPE html>
                     '<span class="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded font-mono">LAN (br0)</span>' :
                     '<span class="text-[10px] bg-purple-500/20 text-purple-400 border border-purple-500/30 px-1.5 py-0.5 rounded font-mono">NAT (lxcbr0)</span>';
 
-                html += `
+                // Desktop Table Row
+                tableHtml += `
                     <tr class="hover:bg-slate-850/50 transition">
                         <td class="py-3 px-6 font-semibold text-white flex items-center gap-2">
                             <span class="text-base">📦</span>
@@ -1393,11 +1743,10 @@ INDEX_HTML = """<!DOCTYPE html>
                         </td>
                         <td class="py-3 px-6 text-right space-x-1 whitespace-nowrap">
                             ${isRunning ? `
-                                <button onclick="openTermModal('${escapeHtml(c.name)}')" class="px-2.5 py-1 bg-emerald-950/50 hover:bg-emerald-900/80 text-emerald-300 rounded text-xs border border-emerald-800/50 transition font-medium" title="Интерактивный веб-терминал">📟 Терминал</button>
+                                <button onclick="openTermModal('${escapeHtml(c.name)}')" class="px-2.5 py-1 bg-emerald-950/50 hover:bg-emerald-900/80 text-emerald-300 rounded text-xs border border-emerald-800/50 transition font-medium" title="Интерактивный шелл">📟 Терминал</button>
                                 <button onclick="openExecModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition" title="Быстрый запуск команд">💻 Exec</button>
                                 <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="px-2 py-1 bg-indigo-950/50 hover:bg-indigo-900/80 text-indigo-300 rounded text-xs border border-indigo-800/50 transition" title="Снимки">📸 Снимки</button>
                                 <button onclick="handleAction('${escapeHtml(c.name)}', 'restart')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded text-xs border border-slate-700 transition" title="Перезагрузить">🔄</button>
-                                <button onclick="handleAction('${escapeHtml(c.name)}', 'freeze')" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-400 rounded text-xs border border-slate-700 transition" title="Заморозить">❄️</button>
                                 <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="px-2.5 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded text-xs border border-rose-800/40 transition" title="Остановить">⏹️ Стоп</button>
                             ` : isFrozen ? `
                                 <button onclick="handleAction('${escapeHtml(c.name)}', 'unfreeze')" class="px-2.5 py-1 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 rounded text-xs border border-cyan-800/40 transition" title="Разморозить">☀️ Разморозить</button>
@@ -1409,8 +1758,62 @@ INDEX_HTML = """<!DOCTYPE html>
                             `}
                         </td>
                     </tr>`;
+
+                // Mobile Card View
+                cardsHtml += `
+                    <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 space-y-3 shadow-sm">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2 overflow-hidden">
+                                <span class="text-base">📦</span>
+                                <span class="font-bold font-mono text-white text-sm truncate">${escapeHtml(c.name)}</span>
+                            </div>
+                            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${badgeColor} shrink-0">
+                                <span class="w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-emerald-400 pulse-dot' : 'bg-slate-500'}"></span>
+                                ${c.state}
+                            </span>
+                        </div>
+
+                        <!-- Card Details Grid -->
+                        <div class="grid grid-cols-2 gap-2 text-xs bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/80">
+                            <div>
+                                <span class="text-slate-500 text-[10px] block">IP АДРЕС</span>
+                                <span class="font-mono text-slate-200 text-xs">${c.ip !== '-' ? escapeHtml(c.ip) : '<span class="text-slate-600">--</span>'}</span>
+                            </div>
+                            <div>
+                                <span class="text-slate-500 text-[10px] block">РЕЖИМ СЕТИ</span>
+                                <div>${netModeBadge}</div>
+                            </div>
+                            <div>
+                                <span class="text-slate-500 text-[10px] block">ПАМЯТЬ RAM</span>
+                                <span class="font-mono text-slate-200 text-xs">${c.memory !== '-' ? escapeHtml(c.memory) : '<span class="text-slate-600">--</span>'}</span>
+                            </div>
+                            <div>
+                                <span class="text-slate-500 text-[10px] block">АВТОСТАРТ</span>
+                                <button onclick="toggleAutostart('${escapeHtml(c.name)}')" class="text-[11px] px-2 py-0.5 rounded border transition ${c.autostart ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' : 'bg-slate-800 text-slate-500 border-slate-700'}">
+                                    ${c.autostart ? 'Включен' : 'Выключен'}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Card Action Buttons Grid -->
+                        <div class="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1">
+                            ${isRunning ? `
+                                <button onclick="openTermModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 rounded-lg text-xs border border-emerald-800/50 font-medium active:scale-95">📟 Терминал</button>
+                                <button onclick="openExecModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs border border-slate-700 active:scale-95">💻 Exec</button>
+                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 rounded-lg text-xs border border-indigo-800/50 active:scale-95">📸 Снимки</button>
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'restart')" class="flex items-center justify-center gap-1 py-2 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg text-xs border border-slate-700 active:scale-95">🔄 Рестарт</button>
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'stop')" class="flex items-center justify-center gap-1 py-2 bg-rose-950/50 hover:bg-rose-900/70 text-rose-300 rounded-lg text-xs border border-rose-800/40 active:scale-95">⏹️ Стоп</button>
+                            ` : `
+                                <button onclick="handleAction('${escapeHtml(c.name)}', 'start')" class="flex items-center justify-center gap-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium active:scale-95">▶ Старт</button>
+                                <button onclick="openSnapshotModal('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 rounded-lg text-xs border border-indigo-800/50 active:scale-95">📸 Снимки</button>
+                                <button onclick="confirmDestroy('${escapeHtml(c.name)}')" class="flex items-center justify-center gap-1 py-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 rounded-lg text-xs border border-rose-900/40 active:scale-95">🗑️ Удалить</button>
+                            `}
+                        </div>
+                    </div>`;
             }
-            tbody.innerHTML = html;
+
+            if (tbody) tbody.innerHTML = tableHtml;
+            if (cardsContainer) cardsContainer.innerHTML = cardsHtml;
         }
 
         async function handleAction(name, action) {
@@ -1422,7 +1825,7 @@ INDEX_HTML = """<!DOCTYPE html>
                 });
                 const d = await res.json();
                 if (d.success) {
-                    showToast(`${name}: действие '${action}' успешно выполнено`, 'success');
+                    showToast(`${name}: действие '${action}' выполнено`, 'success');
                     refreshData();
                 } else {
                     showToast(`${name}: ошибка: ${d.error || d.message}`, 'error');
@@ -1471,14 +1874,8 @@ INDEX_HTML = """<!DOCTYPE html>
                 return;
             }
 
-            let distro = document.getElementById('new-distro').value;
-            let release = document.getElementById('new-release').value;
-
-            if (distro === 'custom') {
-                distro = document.getElementById('custom-distro-input').value.trim();
-                release = document.getElementById('custom-release-input').value.trim();
-            }
-
+            const distro = document.getElementById('new-distro').value;
+            const release = document.getElementById('new-release').value;
             const netMode = document.querySelector('input[name="net_mode"]:checked').value;
 
             const payload = {
@@ -1532,13 +1929,26 @@ INDEX_HTML = """<!DOCTYPE html>
             }
         }
 
-        // --- Terminal Modal (ttyd) ---
+        // --- Terminal Modal (ttyd) with Fullscreen Mode ---
         function openTermModal(name) {
             activeTermTarget = name;
             document.getElementById('term-target-name').innerText = name;
             const iframe = document.getElementById('term-iframe');
             iframe.src = `/ttyd/?arg=${encodeURIComponent(name)}`;
             document.getElementById('term-modal').classList.remove('hidden');
+        }
+
+        function toggleTermFullscreen() {
+            const container = document.getElementById('term-container');
+            const icon = document.getElementById('fullscreen-icon');
+            isTermFullscreen = !isTermFullscreen;
+            if (isTermFullscreen) {
+                container.classList.add('fullscreen-frame');
+                if (icon) icon.innerText = '🗗';
+            } else {
+                container.classList.remove('fullscreen-frame');
+                if (icon) icon.innerText = '⛶';
+            }
         }
 
         function reloadTermFrame() {
@@ -1549,6 +1959,7 @@ INDEX_HTML = """<!DOCTYPE html>
         }
 
         function closeTermModal() {
+            if (isTermFullscreen) toggleTermFullscreen();
             document.getElementById('term-modal').classList.add('hidden');
             document.getElementById('term-iframe').src = '';
             refreshData();
@@ -1588,18 +1999,18 @@ INDEX_HTML = """<!DOCTYPE html>
                 let html = '';
                 for (const s of snaps) {
                     html += `
-                        <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
-                            <div>
-                                <div class="font-mono font-bold text-white flex items-center gap-2">
+                        <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs gap-2">
+                            <div class="overflow-hidden">
+                                <div class="font-mono font-bold text-white flex items-center gap-1.5 truncate">
                                     <span>📸</span>
                                     <span>${escapeHtml(s.name)}</span>
                                     <span class="text-[11px] text-slate-500 font-normal">(${escapeHtml(s.date)})</span>
                                 </div>
-                                <div class="text-slate-400 text-[11px] mt-0.5">${escapeHtml(s.comment || 'Без комментария')}</div>
+                                <div class="text-slate-400 text-[11px] mt-0.5 truncate">${escapeHtml(s.comment || 'Без комментария')}</div>
                             </div>
-                            <div class="space-x-1.5 whitespace-nowrap">
-                                <button onclick="handleRestoreSnapshot('${escapeHtml(s.name)}')" class="px-2.5 py-1 bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 rounded border border-amber-500/30 transition text-xs font-medium">⏪ Откатиться</button>
-                                <button onclick="handleDestroySnapshot('${escapeHtml(s.name)}')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 rounded border border-rose-900/40 transition text-xs">🗑️</button>
+                            <div class="space-x-1 whitespace-nowrap shrink-0">
+                                <button onclick="handleRestoreSnapshot('${escapeHtml(s.name)}')" class="px-2.5 py-1 bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 rounded border border-amber-500/30 transition text-xs font-medium active:scale-95">⏪ Откат</button>
+                                <button onclick="handleDestroySnapshot('${escapeHtml(s.name)}')" class="px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-400 rounded border border-rose-900/40 transition text-xs active:scale-95">🗑️</button>
                             </div>
                         </div>`;
                 }
@@ -1641,7 +2052,7 @@ INDEX_HTML = """<!DOCTYPE html>
         }
 
         async function handleRestoreSnapshot(snapName) {
-            if (!confirm(`Вы действительно хотите откатить контейнер '${activeSnapshotTarget}' к состоянию '${snapName}'? Текущие несохраненные данные будут перезаписаны снимком.`)) {
+            if (!confirm(`Откатить контейнер '${activeSnapshotTarget}' к состоянию '${snapName}'? Несохраненные данные будут перезаписаны.`)) {
                 return;
             }
 
@@ -1773,19 +2184,19 @@ INDEX_HTML = """<!DOCTYPE html>
                 clearInterval(autoRefreshInterval);
                 autoRefreshInterval = null;
                 btn.innerText = 'Выкл';
-                btn.className = 'px-2.5 py-1 text-xs rounded bg-slate-800 text-slate-400 border border-slate-700';
+                btn.className = 'px-2 sm:px-2.5 py-1 text-[11px] rounded bg-slate-800 text-slate-400 border border-slate-700';
             } else {
                 autoRefreshInterval = setInterval(refreshData, 4000);
                 btn.innerText = 'Вкл (4с)';
-                btn.className = 'px-2.5 py-1 text-xs rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+                btn.className = 'px-2 sm:px-2.5 py-1 text-[11px] rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
             }
         }
 
         function refreshData() {
             const icon = document.getElementById('refresh-icon');
-            icon.classList.add('animate-spin');
+            if (icon) icon.classList.add('animate-spin');
             Promise.all([fetchMetrics(), fetchContainers()]).finally(() => {
-                setTimeout(() => icon.classList.remove('animate-spin'), 400);
+                if (icon) setTimeout(() => icon.classList.remove('animate-spin'), 400);
             });
         }
 
