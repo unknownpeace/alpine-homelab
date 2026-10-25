@@ -34,8 +34,21 @@ cat << EOF > /etc/caddy/Caddyfile
 }
 
 homelab.$BASE_DOMAIN, $IP_HOST {
-    root * /var/www/dashboard
-    file_server
+    handle /api/proxy/update {
+        import homelab_auth
+        reverse_proxy 127.0.0.1:8888
+    }
+    handle /api/proxy/refresh {
+        import homelab_auth
+        reverse_proxy 127.0.0.1:8888
+    }
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8888
+    }
+    handle {
+        root * /var/www/dashboard
+        file_server
+    }
 }
 
 import /etc/caddy/conf.d/*.conf

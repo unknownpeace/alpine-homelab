@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, urllib.request, urllib.parse, base64, subprocess, sys, time, os, socket
+import json, urllib.request, urllib.parse, base64, subprocess, sys, time, os, socket, shutil
 
 def get_default_ip():
     env_ip = os.environ.get("IP_HOST")
@@ -520,10 +520,50 @@ def sanitize_obj(obj):
         return [sanitize_obj(x) for x in obj]
     return obj
 
+def persist_proxy_input(val):
+    for env_path in ["/opt/homelab/config.env"]:
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                found = False
+                new_lines = []
+                for line in lines:
+                    if line.strip().startswith("PROXY_INPUT="):
+                        new_lines.append(f'PROXY_INPUT="{val}"\n')
+                        found = True
+                    else:
+                        new_lines.append(line)
+                if not found:
+                    new_lines.append(f'PROXY_INPUT="{val}"\n')
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except Exception:
+                pass
+
 config = sanitize_obj(config)
-os.makedirs("/etc/sing-box", exist_ok=True)
-with open("/etc/sing-box/config.json", "w", encoding="utf-8", errors="replace") as f:
+cfg_dir = "/etc/sing-box"
+cfg_path = os.path.join(cfg_dir, "config.json")
+cfg_bak = os.path.join(cfg_dir, "config.json.bak")
+os.makedirs(cfg_dir, exist_ok=True)
+
+if os.path.exists(cfg_path):
+    try:
+        shutil.copy2(cfg_path, cfg_bak)
+    except Exception:
+        pass
+
+with open(cfg_path, "w", encoding="utf-8", errors="replace") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
 
+# Validate config with sing-box check
+chk = subprocess.run(["sing-box", "check", "-C", cfg_dir], capture_output=True, text=True)
+if chk.returncode != 0:
+    print(f"Error: sing-box configuration check failed: {chk.stderr or chk.stdout}", file=sys.stderr)
+    if os.path.exists(cfg_bak):
+        shutil.copy2(cfg_bak, cfg_path)
+    sys.exit(1)
+
+persist_proxy_input(TARGET)
 subprocess.run(["rc-service", "sing-box", "restart"], check=False)
 print("sing-box configuration updated and reloaded.")

@@ -1638,6 +1638,153 @@ def api_exec(name):
     }
 
 # -----------------------------------------------------------------------------
+# Smart Gateway & Proxy Management (sing-box extended)
+# -----------------------------------------------------------------------------
+
+def get_proxy_info():
+    """Read current sing-box configuration and proxy settings."""
+    cfg_file = "/etc/sing-box/config.json"
+    env_file = "/opt/homelab/config.env"
+    proxy_input = ""
+
+    # 1. Read stored proxy input from config.env
+    if os.path.exists(env_file):
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("PROXY_INPUT="):
+                        proxy_input = line.strip().split("=", 1)[1].strip('"').strip("'")
+                        break
+        except Exception:
+            pass
+
+    # 2. Check running status
+    code, out, _ = run_cmd(["rc-service", "sing-box", "status"])
+    is_running = (code == 0 and "started" in out)
+
+    # 3. Parse config.json outbounds
+    outbounds_list = []
+    current_outbound = "direct"
+    if os.path.exists(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                cfg_data = json.load(f)
+            raw_obs = cfg_data.get("outbounds", [])
+            for ob in raw_obs:
+                tag = ob.get("tag")
+                t_type = ob.get("type")
+                if tag and t_type not in ["dns", "block"]:
+                    outbounds_list.append({"tag": tag, "type": t_type})
+            for ob in raw_obs:
+                t_type = ob.get("type")
+                tag = ob.get("tag", "")
+                if t_type in ["vless", "shadowsocks", "trojan", "hysteria2", "wireguard"]:
+                    current_outbound = tag
+                    break
+                elif tag.startswith("🌐") or tag.startswith("🚀"):
+                    current_outbound = tag
+        except Exception:
+            pass
+
+    # 4. Determine mode & protocol
+    p_lower = proxy_input.strip().lower()
+    if p_lower == "direct" or not p_lower:
+        mode = "direct"
+        protocol = "direct"
+    elif any(p_lower.startswith(x) for x in ["http://", "https://"]):
+        mode = "subscription"
+        protocol = "subscription"
+    else:
+        mode = "server"
+        proto = p_lower.split("://")[0] if "://" in p_lower else "custom"
+        protocol = proto
+
+    return {
+        "running": is_running,
+        "proxy_input": proxy_input,
+        "mode": mode,
+        "protocol": protocol,
+        "current_outbound": current_outbound,
+        "outbounds": outbounds_list
+    }
+
+@app.route("/api/proxy/status", method="GET")
+def api_proxy_status():
+    response.content_type = "application/json"
+    info = get_proxy_info()
+    return {"success": True, **info}
+
+@app.route("/api/proxy/check", method=["GET", "POST"])
+def api_proxy_check():
+    response.content_type = "application/json"
+    t0 = time.time()
+    try:
+        req = urllib.request.Request("https://ifconfig.me", headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            ip = resp.read().decode('utf-8').strip()
+            lat = round((time.time() - t0) * 1000)
+            return {"success": True, "ip": ip, "latency_ms": lat}
+    except Exception as e:
+        return {"success": False, "ip": "Недоступен", "latency_ms": 0, "error": str(e)}
+
+@app.route("/api/proxy/update", method="POST")
+def api_proxy_update():
+    response.content_type = "application/json"
+    data = request.json or {}
+    proxy_input = data.get("proxy_input", "").strip()
+
+    if not proxy_input:
+        return {"success": False, "error": "Строка подключения или URL не могут быть пустыми."}
+
+    p_low = proxy_input.lower()
+    valid_prefix = any(p_low.startswith(p) for p in ["vless://", "ss://", "trojan://", "hy2://", "hysteria2://", "http://", "https://"])
+    if not valid_prefix and p_low != "direct":
+        return {"success": False, "error": "Неподдерживаемый формат. Введите vless://, ss://, trojan://, hy2://, URL подписки https://... или 'direct'."}
+
+    # Execute update-sub.py
+    cmd = ["/usr/local/bin/update-sub.py", proxy_input]
+    code, out, err = run_cmd(cmd, timeout=60)
+    if code != 0:
+        return {"success": False, "error": f"Ошибка применения конфигурации sing-box: {err or out}"}
+
+    time.sleep(1.5)
+    ip_res = "Активен"
+    try:
+        req = urllib.request.Request("https://ifconfig.me", headers={"User-Agent": "curl/8.0"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            ip_res = resp.read().decode('utf-8').strip()
+    except Exception:
+        pass
+
+    info = get_proxy_info()
+    return {
+        "success": True,
+        "message": "Конфигурация sing-box успешно обновлена и перезапущена!",
+        "new_ip": ip_res,
+        **info
+    }
+
+@app.route("/api/proxy/refresh", method="POST")
+def api_proxy_refresh():
+    response.content_type = "application/json"
+    info = get_proxy_info()
+    cur_input = info.get("proxy_input", "").strip()
+    if not cur_input or cur_input == "direct":
+        return {"success": False, "error": "Текущий режим 'direct'. Нечего обновлять из подписки."}
+
+    cmd = ["/usr/local/bin/update-sub.py", cur_input]
+    code, out, err = run_cmd(cmd, timeout=60)
+    if code != 0:
+        return {"success": False, "error": f"Ошибка обновления подписки: {err or out}"}
+
+    time.sleep(1.5)
+    return {
+        "success": True,
+        "message": "Узлы подписки успешно обновлены!",
+        **get_proxy_info()
+    }
+
+# -----------------------------------------------------------------------------
 # Modern Single-Page Dashboard UI
 # -----------------------------------------------------------------------------
 INDEX_HTML = """<!DOCTYPE html>

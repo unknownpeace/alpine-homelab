@@ -84,6 +84,51 @@
             </div>
         </section>
 
+        <!-- Smart Gateway & Proxy Control Banner -->
+        <section class="bg-gradient-to-r from-slate-900 via-slate-900/90 to-indigo-950/40 border border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xl relative overflow-hidden">
+            <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+                <div class="space-y-2">
+                    <div class="flex flex-wrap items-center gap-2.5">
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30" id="proxy-badge-status">
+                            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span>sing-box Active</span>
+                        </span>
+                        <span class="px-2 py-0.5 rounded-md text-xs font-mono bg-indigo-500/10 text-indigo-300 border border-indigo-500/20" id="proxy-mode-badge">
+                            VLESS Server
+                        </span>
+                        <span class="px-2 py-0.5 rounded-md text-xs font-mono bg-slate-800 text-slate-300 border border-slate-700" id="proxy-egress-ip">
+                            Egress IP: Проверка...
+                        </span>
+                    </div>
+
+                    <div class="space-y-1">
+                        <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                            <span>⚡ Сетевой шлюз & Обход блокировок</span>
+                        </h2>
+                        <p class="text-xs text-slate-400 flex items-center gap-2" id="proxy-summary-text">
+                            Активный узел: <span class="font-mono text-slate-200 font-medium" id="proxy-active-node">Определение...</span>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="flex flex-wrap items-center gap-2.5 shrink-0">
+                    <button onclick="openProxyModal()" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium transition shadow-lg shadow-indigo-600/20 flex items-center gap-1.5 active:scale-95">
+                        <span>⚙️ Сменить сервер / подписку</span>
+                    </button>
+                    <button onclick="refreshSubscription()" id="btn-refresh-sub" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition border border-slate-700 flex items-center gap-1.5 active:scale-95" title="Обновить узлы из текущей подписки">
+                        <span>🔄 Обновить</span>
+                    </button>
+                    <button onclick="checkProxyLatency()" id="btn-check-latency" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition border border-slate-700 flex items-center gap-1.5 active:scale-95" title="Проверить задержку и IP">
+                        <span>⚡ Тест IP</span>
+                    </button>
+                    <a id="link-metacubexd" href="https://proxy.lan/ui/" target="_blank" class="px-3 py-2 bg-slate-800/80 hover:bg-slate-700 text-indigo-300 rounded-xl text-xs font-medium transition border border-indigo-500/30 flex items-center gap-1 active:scale-95" title="Открыть веб-панель переключения серверов Metacubexd">
+                        <span>🌐 Узлы (UI) &rarr;</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+
         <!-- Services Grid -->
         <section class="space-y-4">
             <div class="flex items-center justify-between">
@@ -325,6 +370,262 @@
         document.getElementById('stat-dns').textContent = `${host}:53`;
         document.getElementById('doc-ip').textContent = host;
         document.getElementById('samba-path').textContent = `\\\\${host}\\Storage`;
+
+        // Update Metacubexd Link
+        const metaLink = document.getElementById('link-metacubexd');
+        if (metaLink && baseDomain !== 'lan') {
+            metaLink.href = `https://proxy.${baseDomain}/ui/`;
+        }
+
+        // --- Proxy Management Logic ---
+        let currentProxyData = {};
+        let isProxyInputMasked = true;
+
+        async function fetchProxyStatus() {
+            try {
+                const res = await fetch('/api/proxy/status');
+                if (!res.ok) return;
+                const d = await res.json();
+                currentProxyData = d;
+
+                const badgeStatus = document.getElementById('proxy-badge-status');
+                const modeBadge = document.getElementById('proxy-mode-badge');
+                const nodeText = document.getElementById('proxy-active-node');
+                const btnSub = document.getElementById('btn-refresh-sub');
+
+                if (d.running) {
+                    badgeStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span><span>sing-box Active</span>';
+                    badgeStatus.className = 'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+                } else {
+                    badgeStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-rose-400"></span><span>sing-box Stopped</span>';
+                    badgeStatus.className = 'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/30';
+                }
+
+                if (d.mode === 'direct') {
+                    modeBadge.innerText = 'Прямое подключение (Direct)';
+                    modeBadge.className = 'px-2 py-0.5 rounded-md text-xs font-mono bg-slate-800 text-slate-300 border border-slate-700';
+                    if (btnSub) btnSub.style.display = 'none';
+                } else if (d.mode === 'subscription') {
+                    modeBadge.innerText = 'Подписка HTTPS';
+                    modeBadge.className = 'px-2 py-0.5 rounded-md text-xs font-mono bg-purple-500/10 text-purple-300 border border-purple-500/30';
+                    if (btnSub) btnSub.style.display = 'inline-flex';
+                } else {
+                    modeBadge.innerText = `Сервер ${d.protocol ? d.protocol.toUpperCase() : ''}`;
+                    modeBadge.className = 'px-2 py-0.5 rounded-md text-xs font-mono bg-indigo-500/10 text-indigo-300 border border-indigo-500/30';
+                    if (btnSub) btnSub.style.display = 'none';
+                }
+
+                if (nodeText) nodeText.innerText = d.current_outbound || 'direct';
+            } catch (e) {
+                console.warn('Proxy status check failed:', e);
+            }
+        }
+
+        async function checkProxyLatency() {
+            const ipBadge = document.getElementById('proxy-egress-ip');
+            const btn = document.getElementById('btn-check-latency');
+            if (ipBadge) ipBadge.innerText = 'Проверка...';
+            if (btn) btn.classList.add('opacity-50');
+
+            try {
+                const res = await fetch('/api/proxy/check');
+                const d = await res.json();
+                if (d.success) {
+                    ipBadge.innerText = `IP: ${d.ip} (${d.latency_ms} ms)`;
+                } else {
+                    ipBadge.innerText = `IP: Ошибка`;
+                }
+            } catch (e) {
+                if (ipBadge) ipBadge.innerText = 'IP: Ошибка сети';
+            } finally {
+                if (btn) btn.classList.remove('opacity-50');
+            }
+        }
+
+        async function refreshSubscription() {
+            const btn = document.getElementById('btn-refresh-sub');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = '🔄 Обновление...';
+            }
+            try {
+                const res = await fetch('/api/proxy/refresh', { method: 'POST' });
+                const d = await res.json();
+                if (d.success) {
+                    alert(d.message || 'Подписка успешно обновлена!');
+                    fetchProxyStatus();
+                    checkProxyLatency();
+                } else {
+                    alert('Ошибка: ' + (d.error || 'Не удалось обновить подписку'));
+                }
+            } catch (e) {
+                alert('Ошибка запроса: ' + e.message);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = '🔄 Обновить';
+                }
+            }
+        }
+
+        function openProxyModal() {
+            document.getElementById('proxy-modal').classList.remove('hidden');
+            const input = document.getElementById('proxy-input-value');
+            if (currentProxyData && currentProxyData.proxy_input) {
+                input.value = currentProxyData.proxy_input;
+                if (currentProxyData.mode === 'subscription') setProxyTypePreset('subscription');
+                else if (currentProxyData.mode === 'direct') setProxyTypePreset('direct');
+                else setProxyTypePreset('server');
+            }
+        }
+
+        function closeProxyModal() {
+            document.getElementById('proxy-modal').classList.add('hidden');
+        }
+
+        function setProxyTypePreset(type) {
+            const input = document.getElementById('proxy-input-value');
+            const label = document.getElementById('proxy-input-label');
+            const help = document.getElementById('proxy-input-help');
+
+            const bServer = document.getElementById('preset-btn-server');
+            const bSub = document.getElementById('preset-btn-sub');
+            const bDirect = document.getElementById('preset-btn-direct');
+
+            [bServer, bSub, bDirect].forEach(b => {
+                b.className = 'p-2.5 rounded-xl border border-slate-800 bg-slate-950 text-slate-400 font-medium text-center transition hover:text-slate-200';
+            });
+
+            if (type === 'server') {
+                bServer.className = 'p-2.5 rounded-xl border border-indigo-500/50 bg-indigo-500/10 text-indigo-300 font-medium text-center transition';
+                label.innerText = 'Строка подключения (vless://, ss://, trojan://, hy2://):';
+                help.innerText = 'Вставьте отдельный сервер VLESS/XHTTP/Reality, Shadowsocks, Trojan или Hysteria2.';
+                if (input.value === 'direct') input.value = '';
+                input.placeholder = 'vless://uuid@host:443?type=xhttp...#Название';
+            } else if (type === 'subscription') {
+                bSub.className = 'p-2.5 rounded-xl border border-purple-500/50 bg-purple-500/10 text-purple-300 font-medium text-center transition';
+                label.innerText = 'URL адрес подписки (https://...):';
+                help.innerText = 'Поддерживаются подписки sing-box JSON, Clash YAML и Base64.';
+                if (input.value === 'direct') input.value = '';
+                input.placeholder = 'https://sub.domain.com/sub/token?fmt=sing-box';
+            } else {
+                bDirect.className = 'p-2.5 rounded-xl border border-emerald-500/50 bg-emerald-500/10 text-emerald-300 font-medium text-center transition';
+                label.innerText = 'Прямое подключение (direct):';
+                help.innerText = 'Трафик пойдет напрямую через вашего провайдера без прокси.';
+                input.value = 'direct';
+            }
+        }
+
+        function toggleProxyInputVisibility() {
+            const input = document.getElementById('proxy-input-value');
+            const btn = document.getElementById('btn-toggle-eye');
+            isProxyInputMasked = !isProxyInputMasked;
+            if (isProxyInputMasked) {
+                input.style.webkitTextSecurity = 'disc';
+                btn.innerText = '👁️ Показать';
+            } else {
+                input.style.webkitTextSecurity = 'none';
+                btn.innerText = '🔒 Скрыть';
+            }
+        }
+
+        async function handleSaveProxy(e) {
+            e.preventDefault();
+            const val = document.getElementById('proxy-input-value').value.trim();
+            if (!val) {
+                alert('Введите ссылку на сервер, подписку или direct');
+                return;
+            }
+            const btnSubmit = document.getElementById('btn-submit-proxy');
+            const progress = document.getElementById('proxy-update-progress');
+
+            btnSubmit.disabled = true;
+            btnSubmit.innerText = 'Применение...';
+            progress.classList.remove('hidden');
+
+            try {
+                const res = await fetch('/api/proxy/update', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ proxy_input: val })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    alert(d.message || 'Прокси успешно обновлен!');
+                    closeProxyModal();
+                    fetchProxyStatus();
+                    checkProxyLatency();
+                } else {
+                    alert('Ошибка: ' + (d.error || 'Не удалось применить конфигурацию'));
+                }
+            } catch (err) {
+                alert('Ошибка запроса: ' + err.message);
+            } finally {
+                btnSubmit.disabled = false;
+                btnSubmit.innerText = 'Применить и перезапустить';
+                progress.classList.add('hidden');
+            }
+        }
+
+        // Initialize proxy data and periodic check
+        fetchProxyStatus();
+        checkProxyLatency();
+        setInterval(fetchProxyStatus, 15000);
+    </script>
+
+    <!-- Proxy Reconfigure Modal -->
+    <div id="proxy-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <span class="text-xl">⚡</span>
+                    <h3 class="font-bold text-white text-sm sm:text-base">Настройка подключения sing-box</h3>
+                </div>
+                <button onclick="closeProxyModal()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+            </div>
+
+            <form onsubmit="handleSaveProxy(event)" class="space-y-4 text-xs">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-200 mb-1.5">Тип подключения:</label>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button type="button" onclick="setProxyTypePreset('server')" id="preset-btn-server" class="p-2.5 rounded-xl border border-indigo-500/50 bg-indigo-500/10 text-indigo-300 font-medium text-center transition">
+                            <span class="block text-sm mb-0.5">🚀</span>
+                            <span>Сервер</span>
+                        </button>
+                        <button type="button" onclick="setProxyTypePreset('subscription')" id="preset-btn-sub" class="p-2.5 rounded-xl border border-slate-800 bg-slate-950 text-slate-400 font-medium text-center transition hover:text-slate-200">
+                            <span class="block text-sm mb-0.5">📑</span>
+                            <span>Подписка</span>
+                        </button>
+                        <button type="button" onclick="setProxyTypePreset('direct')" id="preset-btn-direct" class="p-2.5 rounded-xl border border-slate-800 bg-slate-950 text-slate-400 font-medium text-center transition hover:text-slate-200">
+                            <span class="block text-sm mb-0.5">🌐</span>
+                            <span>Direct</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="text-xs font-medium text-slate-300" id="proxy-input-label">Строка подключения (vless://, ss://, trojan://, hy2://):</label>
+                        <button type="button" onclick="toggleProxyInputVisibility()" id="btn-toggle-eye" class="text-[11px] text-indigo-400 hover:underline">👁️ Показать</button>
+                    </div>
+                    <textarea id="proxy-input-value" rows="3" style="-webkit-text-security: disc;" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500" placeholder="vless://uuid@host:443?type=xhttp...#Название"></textarea>
+                    <p class="text-[11px] text-slate-500 mt-1" id="proxy-input-help">Вставьте отдельный сервер VLESS/XHTTP/Reality, Shadowsocks, Trojan или Hysteria2.</p>
+                </div>
+
+                <div id="proxy-update-progress" class="hidden p-3 bg-indigo-950/40 border border-indigo-500/30 rounded-xl space-y-1">
+                    <div class="flex items-center gap-2 text-xs text-indigo-300 font-medium">
+                        <svg class="animate-spin w-4 h-4 text-indigo-400 shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                        <span>Применение и проверка конфигурации sing-box...</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeProxyModal()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs">Отмена</button>
+                    <button type="submit" id="btn-submit-proxy" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg text-xs transition">Применить и перезапустить</button>
+                </div>
+            </form>
+        </div>
+    </div>
     </script>
 </body>
 </html>
