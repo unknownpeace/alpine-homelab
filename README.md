@@ -22,6 +22,7 @@
 
 | Сервис | Назначение | Домен в локальной сети | Локальный порт | Аутентификация |
 | :--- | :--- | :--- | :--- | :--- |
+| **Homelab Portal** | Главный дашборд портал | `https://homelab.lan` (или по IP) | `443` | — |
 | **Caddy 2** | Reverse Proxy & CA | `https://*.lan/` | `443` | — |
 | **sing-box UI & DNS** | Прокси (Metacubexd), DNS & AdBlock | `https://proxy.lan/ui/` | `127.0.0.1:9090` (DNS: 53) | `admin` / пароль из мастера |
 | **LXC Sandbox Mgr** | Веб-панель контейнеров + ttyd | `https://lxc.lan/` | `127.0.0.1:8888, 7681` | `admin` / пароль из мастера |
@@ -32,6 +33,7 @@
 | **Transmission** | Торрент-клиент | `https://torrent.lan/` | `127.0.0.1:9091` | `admin` / пароль из мастера |
 | **Media Downloader** | Загрузчик видео/аудио (yt-dlp) | `https://ytdl.lan/` | `127.0.0.1:8080` | `admin` / пароль из мастера |
 | **Samba / WSDD** | Сетевые папки Windows/Mac | `\\IP_HOST\Storage` | `445, 139, 3702` | `admin` / пароль из мастера |
+| **AdGuard Home** | Визуальный DNS-щит & статистика | `https://adguard.lan` | `127.0.0.1:3001` (DNS: 53) | Опционально (`ENABLE_ADGUARD_HOME`) |
 
 ---
 
@@ -74,6 +76,16 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/unknownpeace/alpine-homela
 - **Статус комплекса:**
   ```bash
   homelab status
+  ```
+- **Резервное копирование и восстановление (Disaster Recovery):**
+  ```bash
+  homelab backup                  # Создать архив баз данных и конфигов в /srv/storage/backups
+  homelab restore <архив.tar.gz>  # Восстановить весь комплекс из архива в один клик
+  ```
+- **Удаленный доступ через Tailscale (Zero-Trust Mesh VPN):**
+  ```bash
+  homelab tailscale up            # Подключить хомлаб к вашей персональной сети без белого IP
+  homelab tailscale status        # Проверить статус подключения
   ```
 - **Управление отдельной службой:**
   ```bash

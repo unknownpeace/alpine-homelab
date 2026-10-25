@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpine Homelab Appliance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50: '#eef2ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-indigo-500 selection:text-white">
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 text-white font-bold text-xl">
+                    🏔️
+                </div>
+                <div>
+                    <h1 class="text-base font-semibold leading-tight text-white flex items-center gap-2">
+                        Alpine Homelab
+                        <span class="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Zero-Docker</span>
+                    </h1>
+                    <p class="text-xs text-slate-400 font-mono" id="host-ip-banner">Загрузка сети...</p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-3">
+                <a href="/caddy-homelab-root.crt" download class="inline-flex items-center space-x-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg border border-slate-700 transition shadow-sm">
+                    <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                    <span>Сертификат CA</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+        <!-- Network Quick Stats Banner -->
+        <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 flex items-center space-x-4">
+                <div class="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xl text-indigo-400">🌐</div>
+                <div>
+                    <div class="text-xs text-slate-400 font-medium">Основной шлюз (Gateway)</div>
+                    <div class="text-sm font-semibold font-mono text-slate-200" id="stat-gateway">192.168.1.147</div>
+                </div>
+            </div>
+            <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 flex items-center space-x-4">
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-xl text-emerald-400">🛡️</div>
+                <div>
+                    <div class="text-xs text-slate-400 font-medium">DNS & AdBlocker</div>
+                    <div class="text-sm font-semibold font-mono text-slate-200" id="stat-dns">192.168.1.147 :53</div>
+                </div>
+            </div>
+            <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 flex items-center space-x-4">
+                <div class="w-12 h-12 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-xl text-purple-400">📦</div>
+                <div>
+                    <div class="text-xs text-slate-400 font-medium">Песочница LXC</div>
+                    <div class="text-sm font-semibold font-mono text-slate-200">10.0.3.0/24 & br0</div>
+                </div>
+            </div>
+            <div class="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 flex items-center space-x-4">
+                <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-xl text-amber-400">⚡</div>
+                <div>
+                    <div class="text-xs text-slate-400 font-medium">Потребление RAM</div>
+                    <div class="text-sm font-semibold font-mono text-slate-200">~450 MB (Всего)</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Services Grid -->
+        <section class="space-y-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+                    <span>Установленные веб-сервисы</span>
+                    <span class="text-xs font-normal text-slate-400" id="domain-badge">(*.lan)</span>
+                </h2>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" id="services-grid">
+                
+                <!-- Vaultwarden -->
+                <a href="https://vault.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">🔐</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">HTTPS :8000</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Vaultwarden</h3>
+                        <p class="text-xs text-slate-400 mt-1">Менеджер паролей Bitwarden с поддержкой Passkeys и FIDO2.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>vault.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- Forgejo Git -->
+                <a href="https://git.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">🐙</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">SSH: 2222</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Forgejo Git</h3>
+                        <p class="text-xs text-slate-400 mt-1">Персональный легковесный Git-сервер (форк Gitea) на SQLite.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>git.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- LXC Sandbox Manager -->
+                <a href="https://lxc.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">📦</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">ttyd Terminal</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">LXC Sandbox Manager</h3>
+                        <p class="text-xs text-slate-400 mt-1">Панель управления контейнерами (Debian, Ubuntu, Alpine), снапшоты и терминал.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>lxc.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- sing-box Metacubexd -->
+                <a href="https://proxy.lan/ui/" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">⚡</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">VLESS & DNS</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">sing-box Metacubexd</h3>
+                        <p class="text-xs text-slate-400 mt-1">Панель управления узлами прокси, переключение серверов и мониторинг задержек.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>proxy.lan/ui/</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- Navidrome Music -->
+                <a href="https://music.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">🎵</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-pink-500/10 text-pink-400 border border-pink-500/20">Subsonic API</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Navidrome Music</h3>
+                        <p class="text-xs text-slate-400 mt-1">Стриминговый плеер личной музыкальной коллекции для ПК и мобильных клиентов.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>music.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- Transmission -->
+                <a href="https://torrent.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">📥</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">RPC :9091</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Transmission BitTorrent</h3>
+                        <p class="text-xs text-slate-400 mt-1">Автономный торрент-клиент с защитой трафика (направление в прямой интернет).</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>torrent.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- Media Downloader yt-dlp -->
+                <a href="https://ytdl.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">🎬</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400 border border-red-500/20">yt-dlp Core</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Media Downloader</h3>
+                        <p class="text-xs text-slate-400 mt-1">Скачивание видео и музыки с YouTube, VK, Rutube напрямую в хранилище хомлаба.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>ytdl.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- Conduit Matrix -->
+                <a href="https://matrix.lan" target="_blank" class="group bg-slate-900/70 hover:bg-slate-800/70 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition duration-200 shadow-sm hover:shadow-indigo-500/5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">💬</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">RocksDB :6167</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white group-hover:text-indigo-300 transition">Conduit Matrix</h3>
+                        <p class="text-xs text-slate-400 mt-1">Сверхбыстрый сервер мессенджера Matrix для приватного общения через Element.</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span>matrix.lan</span>
+                        <span class="text-indigo-400 group-hover:translate-x-1 transition">Открыть &rarr;</span>
+                    </div>
+                </a>
+
+                <!-- Samba Network Shares -->
+                <div class="group bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-2xl">📁</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">SMB & WSDD</span>
+                        </div>
+                        <h3 class="text-base font-semibold text-white">Samba File Share</h3>
+                        <p class="text-xs text-slate-400 mt-1">Сетевые папки для Проводника Windows и macOS (Storage, Music, Downloads).</p>
+                    </div>
+                    <div class="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono text-slate-400">
+                        <span id="samba-path">\\HOMELAB\Storage</span>
+                        <button onclick="navigator.clipboard.writeText('\\\\' + location.hostname + '\\Storage'); alert('Путь SMB скопирован!');" class="text-indigo-400 hover:text-indigo-300">Копировать</button>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Setup Instructions Card -->
+        <section class="bg-gradient-to-r from-slate-900 to-indigo-950/30 border border-slate-800 rounded-2xl p-6">
+            <h3 class="text-sm font-semibold text-white flex items-center gap-2 mb-3">
+                <span>💡 Как подключить домашние устройства (ПК, ТВ, Телефон):</span>
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-300">
+                <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
+                    <span class="font-bold text-indigo-400 block mb-1">Шаг 1: DNS и Шлюз</span>
+                    В сетевых настройках устройства или роутера укажите DNS и Gateway: <code class="text-emerald-400 font-mono" id="doc-ip">192.168.1.147</code>.
+                </div>
+                <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
+                    <span class="font-bold text-indigo-400 block mb-1">Шаг 2: Сертификат HTTPS</span>
+                    Скачайте сертификат <a href="/caddy-homelab-root.crt" class="text-indigo-400 underline">caddy-homelab-root.crt</a> и установите в «Доверенные центры сертификации».
+                </div>
+                <div class="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800">
+                    <span class="font-bold text-indigo-400 block mb-1">Шаг 3: Авторизация</span>
+                    Для доступа к сервисам используйте учетные данные из вашего файла <code class="text-yellow-400 font-mono">config.env</code>.
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <footer class="border-t border-slate-800 py-6 text-center text-xs text-slate-500 font-mono">
+        Alpine Linux 3.24 &bull; OpenRC Supervised &bull; Zero-Docker Homelab
+    </footer>
+
+    <script>
+        // Dynamically detect base domain and host IP from current window location
+        const host = window.location.hostname;
+        const parts = host.split('.');
+        let baseDomain = 'lan';
+        if (parts.length > 1 && isNaN(parts[parts.length - 1])) {
+            baseDomain = parts.slice(1).join('.');
+        }
+        document.getElementById('domain-badge').textContent = `(*.${baseDomain})`;
+
+        // Replace all *.lan links with current domain if custom domain used
+        if (baseDomain !== 'lan') {
+            document.querySelectorAll('a[href*=".lan"]').forEach(a => {
+                a.href = a.href.replace('.lan', '.' + baseDomain);
+                const mono = a.querySelector('.font-mono span');
+                if (mono) mono.textContent = mono.textContent.replace('.lan', '.' + baseDomain);
+            });
+        }
+
+        // Display current hostname/IP in banners
+        document.getElementById('host-ip-banner').textContent = `Хост: ${host}`;
+        document.getElementById('stat-gateway').textContent = host;
+        document.getElementById('stat-dns').textContent = `${host}:53`;
+        document.getElementById('doc-ip').textContent = host;
+        document.getElementById('samba-path').textContent = `\\\\${host}\\Storage`;
+    </script>
+</body>
+</html>

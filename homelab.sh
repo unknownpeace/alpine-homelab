@@ -38,6 +38,9 @@ usage() {
     echo "  update             Pull git updates, refresh rules, and restart services"
     echo "  doctor             Run full automated system health & diagnostics audit"
     echo "  status             Show quick summary of running services and resources"
+    echo "  backup [dir]       Create atomic disaster recovery backup of DBs & configs"
+    echo "  restore <file>     Restore full homelab state from a backup archive"
+    echo "  tailscale <act>    Manage Tailscale Zero-Trust mesh VPN (up, down, status)"
     echo "  service <act> <svc> Manage a service (start, stop, restart, status, logs)"
     echo "  help               Display this help message"
     echo ""
@@ -70,6 +73,7 @@ cmd_install() {
     log_info ">>> Phase 2: Homelab Services Deployment <<<"
     [ "${ENABLE_SINGBOX:-yes}" = "yes" ] && sh "$SERVICES_DIR/sing-box/install.sh"
     [ "${ENABLE_CADDY:-yes}" = "yes" ] && sh "$SERVICES_DIR/caddy/install.sh"
+    [ "${ENABLE_DASHBOARD:-yes}" = "yes" ] && sh "$SERVICES_DIR/dashboard/install.sh"
     [ "${ENABLE_VAULTWARDEN:-yes}" = "yes" ] && sh "$SERVICES_DIR/vaultwarden/install.sh"
     [ "${ENABLE_FORGEJO:-yes}" = "yes" ] && sh "$SERVICES_DIR/forgejo/install.sh"
     [ "${ENABLE_CONDUIT:-yes}" = "yes" ] && sh "$SERVICES_DIR/conduit/install.sh"
@@ -78,6 +82,8 @@ cmd_install() {
     [ "${ENABLE_SAMBA:-yes}" = "yes" ] && sh "$SERVICES_DIR/samba/install.sh"
     [ "${ENABLE_YTDLP:-yes}" = "yes" ] && sh "$SERVICES_DIR/ytdlp-web/install.sh"
     [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && sh "$SERVICES_DIR/lxc-manager/install.sh"
+    [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && sh "$SERVICES_DIR/adguardhome/install.sh"
+    [ "${ENABLE_TAILSCALE:-no}" = "yes" ] && sh "$SERVICES_DIR/tailscale/install.sh"
 
     # Print Summary Cheat Sheet
     cmd_summary
@@ -99,13 +105,14 @@ cmd_summary() {
     fi
     echo -e "${C_PURPLE}${C_BOLD}2. СЕРТИФИКАТ ДЛЯ ЗЕЛЕНОГО HTTPS (БЕЗ ПРЕДУПРЕЖДЕНИЙ БРАУЗЕРА):${C_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
-    echo -e "  Файл сертификата : ${C_GREEN}/root/caddy-homelab-root.crt${C_RESET}"
+    echo -e "  Файл сертификата : ${C_GREEN}/root/caddy-homelab-root.crt${C_RESET}  (или прямо с дашборда)"
     echo -e "  Скачайте его и установите в «Доверенные корневые центры сертификации» на ПК/Телефоне."
     echo ""
     echo -e "${C_PURPLE}${C_BOLD}3. ДОСТУП К ВЕБ-СЕРВИСАМ (Локальный защищенный HTTPS):${C_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
     echo -e "  ${C_WHITE}Сервис${C_RESET}          | ${C_WHITE}Адрес домена${C_RESET}               | ${C_WHITE}Локальный порт${C_RESET}   | ${C_WHITE}Авторизация${C_RESET}"
     echo -e "  ------------------------------------------------------------------------------"
+    [ "${ENABLE_DASHBOARD:-yes}" = "yes" ]   && echo -e "  Портал / Дашборд: ${C_GREEN}${C_BOLD}https://homelab.$BASE_DOMAIN${C_RESET}      https://$IP_HOST        — (Главная страница)"
     [ "${ENABLE_VAULTWARDEN:-yes}" = "yes" ] && echo -e "  Vaultwarden     : ${C_CYAN}https://vault.$BASE_DOMAIN${C_RESET}        127.0.0.1:8000           Встроенная (Web Vault)"
     [ "${ENABLE_FORGEJO:-yes}" = "yes" ]     && echo -e "  Forgejo Git     : ${C_CYAN}https://git.$BASE_DOMAIN${C_RESET}          127.0.0.1:3000           Встроенная (SSH: 2222)"
     [ "${ENABLE_CONDUIT:-yes}" = "yes" ]     && echo -e "  Matrix Conduit  : ${C_CYAN}https://matrix.$BASE_DOMAIN${C_RESET}       127.0.0.1:6167           Токены клиентов Matrix"
@@ -114,6 +121,7 @@ cmd_summary() {
     [ "${ENABLE_YTDLP:-yes}" = "yes" ]       && echo -e "  Media Downloader: ${C_CYAN}https://ytdl.$BASE_DOMAIN${C_RESET}         127.0.0.1:8080           ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}"
     [ "${ENABLE_SINGBOX:-yes}" = "yes" ]     && echo -e "  sing-box UI/DNS : ${C_CYAN}https://proxy.$BASE_DOMAIN/ui/${C_RESET}    127.0.0.1:9090 (DNS: 53) ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}"
     [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && echo -e "  LXC Sandbox Mgr : ${C_CYAN}https://lxc.$BASE_DOMAIN${C_RESET}          127.0.0.1:8888, 7681     ${C_YELLOW}$AUTH_USER / $AUTH_PASS${C_RESET}  (LAN DHCP, Snapshots, ttyd)"
+    [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && echo -e "  AdGuard Home    : ${C_CYAN}https://adguard.$BASE_DOMAIN${C_RESET}      127.0.0.1:3001 (DNS: 53) Регистрация первой учетки"
     echo ""
     if [ "${ENABLE_SAMBA:-yes}" = "yes" ]; then
         echo -e "${C_PURPLE}${C_BOLD}4. СЕТЕВЫЕ ПАПКИ SAMBA (Проводник Windows):${C_RESET}"
@@ -124,6 +132,12 @@ cmd_summary() {
         echo -e "  ${C_WHITE}Пользователь SMB :${C_RESET} ${C_YELLOW}$AUTH_USER${C_RESET} | ${C_WHITE}Пароль SMB:${C_RESET} ${C_YELLOW}$AUTH_PASS${C_RESET}"
         echo ""
     fi
+    echo -e "${C_PURPLE}${C_BOLD}5. РЕЗЕРВНОЕ КОПИРОВАНИЕ И УДАЛЕННЫЙ ДОСТУП:${C_RESET}"
+    echo -e "  ------------------------------------------------------------------------------"
+    echo -e "  ${C_WHITE}Создать бэкап баз данных:${C_RESET} ${C_CYAN}homelab backup${C_RESET}           (в $STORAGE_BASE/backups)"
+    echo -e "  ${C_WHITE}Восстановить из бэкапа  :${C_RESET} ${C_CYAN}homelab restore <файл.tar.gz>${C_RESET}"
+    echo -e "  ${C_WHITE}Удаленный доступ VPN    :${C_RESET} ${C_CYAN}homelab tailscale up${C_RESET}     (без белого IP)"
+    echo ""
     echo -e "${C_GREEN}Команда управления комплексом: ${C_CYAN}homelab doctor${C_RESET} / ${C_CYAN}homelab update${C_RESET}"
 }
 
@@ -178,6 +192,8 @@ cmd_doctor() {
     [ "${ENABLE_SAMBA:-yes}" = "yes" ] && { check_svc "samba"; check_svc "wsdd"; }
     [ "${ENABLE_YTDLP:-yes}" = "yes" ] && check_svc "ytdlp-web"
     [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && { check_svc "lxc-manager"; check_svc "ttyd"; check_svc "lxc"; }
+    [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && check_svc "adguardhome"
+    [ "${ENABLE_TAILSCALE:-no}" = "yes" ] && check_svc "tailscale"
 
     echo ""
     echo -e "${C_WHITE}Checking Network Bridges:${C_RESET}"
@@ -193,7 +209,7 @@ cmd_doctor() {
     done
 
     echo ""
-    echo -e "${C_WHITE}Checking DNS Resolution (sing-box port 53):${C_RESET}"
+    echo -e "${C_WHITE}Checking DNS Resolution (port 53):${C_RESET}"
     if nslookup "vault.$BASE_DOMAIN" 127.0.0.1 >/dev/null 2>&1; then
         echo -e "  [${C_GREEN}PASS${C_RESET}] vault.$BASE_DOMAIN resolves locally"
     else
@@ -210,7 +226,9 @@ cmd_doctor() {
 
     echo ""
     echo -e "${C_WHITE}Checking HTTPS Endpoints:${C_RESET}"
-    for prefix in vault git matrix music lxc; do
+    local endpoints="homelab vault git matrix music lxc"
+    [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && endpoints="$endpoints adguard"
+    for prefix in $endpoints; do
         local d="$prefix.$BASE_DOMAIN"
         local code
         code=$(curl -s -k -o /dev/null -w "%{http_code}" --resolve "$d:443:127.0.0.1" "https://$d/" || echo "000")
@@ -271,6 +289,196 @@ cmd_service() {
     esac
 }
 
+cmd_backup() {
+    check_root
+    local dest="${1:-$STORAGE_BASE/backups}"
+    mkdir -p "$dest"
+    local ts
+    ts="$(date +%Y%m%d_%H%M%S)"
+    local target="$dest/homelab_backup_$ts.tar.gz"
+    local tmp
+    tmp="$(mktemp -d)"
+
+    log_info "Creating atomic disaster recovery backup to $target..."
+
+    # 1. Hot SQLite databases
+    if [ -f /var/lib/vaultwarden/db.sqlite3 ]; then
+        mkdir -p "$tmp/vaultwarden"
+        sqlite3 /var/lib/vaultwarden/db.sqlite3 ".backup '$tmp/vaultwarden/db.sqlite3'" 2>/dev/null || cp -f /var/lib/vaultwarden/db.sqlite3 "$tmp/vaultwarden/"
+        cp -f /var/lib/vaultwarden/rsa_key* "$tmp/vaultwarden/" 2>/dev/null || true
+        cp -f /var/lib/vaultwarden/.env "$tmp/vaultwarden/" 2>/dev/null || true
+    fi
+
+    if [ -f /var/lib/forgejo/data/forgejo.db ]; then
+        mkdir -p "$tmp/forgejo"
+        sqlite3 /var/lib/forgejo/data/forgejo.db ".backup '$tmp/forgejo/forgejo.db'" 2>/dev/null || cp -f /var/lib/forgejo/data/forgejo.db "$tmp/forgejo/"
+        cp -rf /etc/forgejo "$tmp/forgejo/etc" 2>/dev/null || true
+        cp -rf /var/lib/forgejo/data/forgejo-repositories "$tmp/forgejo/repos" 2>/dev/null || true
+    fi
+
+    if [ -f /var/lib/navidrome/navidrome.db ]; then
+        mkdir -p "$tmp/navidrome"
+        sqlite3 /var/lib/navidrome/navidrome.db ".backup '$tmp/navidrome/navidrome.db'" 2>/dev/null || cp -f /var/lib/navidrome/navidrome.db "$tmp/navidrome/"
+    fi
+
+    # 2. Conduit Matrix
+    if [ -d /var/lib/conduit ]; then
+        mkdir -p "$tmp/conduit"
+        cp -rf /var/lib/conduit "$tmp/conduit/data" 2>/dev/null || true
+        cp -rf /etc/conduit "$tmp/conduit/etc" 2>/dev/null || true
+    fi
+
+    # 3. Transmission config
+    if [ -d /var/lib/transmission/config ]; then
+        mkdir -p "$tmp/transmission"
+        cp -rf /var/lib/transmission/config "$tmp/transmission/" 2>/dev/null || true
+    fi
+
+    # 4. AdGuard Home config
+    if [ -d /etc/adguardhome ]; then
+        mkdir -p "$tmp/adguardhome"
+        cp -rf /etc/adguardhome "$tmp/adguardhome/" 2>/dev/null || true
+    fi
+
+    # 5. System config & Caddy PKI
+    mkdir -p "$tmp/system"
+    [ -f "/opt/homelab/config.env" ] && cp -f "/opt/homelab/config.env" "$tmp/system/config.env"
+    [ -d "/var/lib/caddy/.local/share/caddy/pki" ] && cp -rf "/var/lib/caddy/.local/share/caddy/pki" "$tmp/system/pki"
+
+    # 6. Compress
+    tar -czf "$target" -C "$tmp" .
+    rm -rf "$tmp"
+
+    # 7. Rotation (keep 7 newest)
+    ls -1t "$dest"/homelab_backup_*.tar.gz 2>/dev/null | tail -n +8 | xargs rm -f 2>/dev/null || true
+
+    log_success "Backup created: $target ($(ls -lh "$target" | awk '{print $5}'))"
+}
+
+cmd_restore() {
+    check_root
+    local src="${1:-}"
+    if [ -z "$src" ] || [ ! -f "$src" ]; then
+        log_error "Usage: homelab restore <path_to_backup.tar.gz>"
+        exit 1
+    fi
+
+    log_warn "Starting full disaster recovery restore from $src..."
+    printf "Are you sure you want to restore? This will overwrite current state [y/N]: "
+    read -r ans
+    if [ "$ans" != "y" ] && [ "$ans" != "Y" ]; then
+        log_info "Restore cancelled by user."
+        exit 0
+    fi
+
+    local tmp
+    tmp="$(mktemp -d)"
+    tar -xzf "$src" -C "$tmp"
+
+    log_info "Stopping services for atomic database restore..."
+    rc-service vaultwarden stop >/dev/null 2>&1 || true
+    rc-service forgejo stop >/dev/null 2>&1 || true
+    rc-service conduit stop >/dev/null 2>&1 || true
+    rc-service navidrome stop >/dev/null 2>&1 || true
+    rc-service transmission-daemon stop >/dev/null 2>&1 || true
+    rc-service adguardhome stop >/dev/null 2>&1 || true
+
+    # Restore Vaultwarden
+    if [ -d "$tmp/vaultwarden" ]; then
+        mkdir -p /var/lib/vaultwarden
+        cp -rf "$tmp/vaultwarden/"* /var/lib/vaultwarden/
+        chown -R vaultwarden:vaultwarden /var/lib/vaultwarden
+    fi
+
+    # Restore Forgejo
+    if [ -d "$tmp/forgejo" ]; then
+        mkdir -p /var/lib/forgejo/data /etc/forgejo
+        [ -f "$tmp/forgejo/forgejo.db" ] && cp -f "$tmp/forgejo/forgejo.db" /var/lib/forgejo/data/forgejo.db
+        [ -d "$tmp/forgejo/etc" ] && cp -rf "$tmp/forgejo/etc/"* /etc/forgejo/
+        [ -d "$tmp/forgejo/repos" ] && cp -rf "$tmp/forgejo/repos/"* /var/lib/forgejo/data/forgejo-repositories/
+        chown -R forgejo:www-data /etc/forgejo /var/lib/forgejo
+    fi
+
+    # Restore Conduit
+    if [ -d "$tmp/conduit" ]; then
+        mkdir -p /var/lib/conduit /etc/conduit
+        cp -rf "$tmp/conduit/data/"* /var/lib/conduit/
+        [ -d "$tmp/conduit/etc" ] && cp -rf "$tmp/conduit/etc/"* /etc/conduit/
+        chown -R conduit:conduit /var/lib/conduit /etc/conduit
+    fi
+
+    # Restore Navidrome
+    if [ -d "$tmp/navidrome" ]; then
+        mkdir -p /var/lib/navidrome
+        cp -f "$tmp/navidrome/navidrome.db" /var/lib/navidrome/navidrome.db
+        chown -R navidrome:media /var/lib/navidrome
+    fi
+
+    # Restore Transmission
+    if [ -d "$tmp/transmission" ]; then
+        mkdir -p /var/lib/transmission/config
+        cp -rf "$tmp/transmission/config/"* /var/lib/transmission/config/
+        chown -R transmission:media /var/lib/transmission
+    fi
+
+    # Restore AdGuard Home
+    if [ -d "$tmp/adguardhome" ]; then
+        mkdir -p /etc/adguardhome
+        cp -rf "$tmp/adguardhome/"* /etc/adguardhome/
+    fi
+
+    # Restore System & PKI
+    if [ -d "$tmp/system" ]; then
+        [ -f "$tmp/system/config.env" ] && cp -f "$tmp/system/config.env" /opt/homelab/config.env
+        if [ -d "$tmp/system/pki" ]; then
+            mkdir -p /var/lib/caddy/.local/share/caddy
+            cp -rf "$tmp/system/pki" /var/lib/caddy/.local/share/caddy/
+            chown -R caddy:caddy /var/lib/caddy
+        fi
+    fi
+
+    rm -rf "$tmp"
+
+    log_info "Restarting restored services..."
+    rc-service vaultwarden start >/dev/null 2>&1 || true
+    rc-service forgejo start >/dev/null 2>&1 || true
+    rc-service conduit start >/dev/null 2>&1 || true
+    rc-service navidrome start >/dev/null 2>&1 || true
+    rc-service transmission-daemon start >/dev/null 2>&1 || true
+    rc-service adguardhome start >/dev/null 2>&1 || true
+    rc-service caddy reload >/dev/null 2>&1 || rc-service caddy restart >/dev/null 2>&1 || true
+
+    log_success "Disaster recovery restore completed successfully."
+    cmd_doctor
+}
+
+cmd_tailscale() {
+    check_root
+    local sub="${1:-status}"
+    shift || true
+    case "$sub" in
+        up)
+            if ! command -v tailscale >/dev/null 2>&1; then
+                sh "$SERVICES_DIR/tailscale/install.sh"
+            fi
+            rc-service tailscale start >/dev/null 2>&1 || true
+            tailscale up "$@"
+            ;;
+        down)
+            tailscale down
+            ;;
+        status)
+            tailscale status
+            ;;
+        install)
+            sh "$SERVICES_DIR/tailscale/install.sh"
+            ;;
+        *)
+            echo "Usage: homelab tailscale <up|down|status|install> [args]"
+            ;;
+    esac
+}
+
 # Main Command Dispatcher
 CMD="${1:-help}"
 shift || true
@@ -293,6 +501,15 @@ case "$CMD" in
         ;;
     summary)
         cmd_summary
+        ;;
+    backup)
+        cmd_backup "$@"
+        ;;
+    restore)
+        cmd_restore "$@"
+        ;;
+    tailscale)
+        cmd_tailscale "$@"
         ;;
     help|--help|-h)
         usage

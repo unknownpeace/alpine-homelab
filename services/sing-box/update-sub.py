@@ -300,6 +300,7 @@ predefined_hosts = {
     f"ytdl.{BASE_DOMAIN}": IP_HOST,
     f"proxy.{BASE_DOMAIN}": IP_HOST,
     f"lxc.{BASE_DOMAIN}": IP_HOST,
+    f"adguard.{BASE_DOMAIN}": IP_HOST,
     f"homelab.{BASE_DOMAIN}": IP_HOST
 }
 
@@ -339,7 +340,7 @@ config = {
             "type": "direct",
             "tag": "dns-in",
             "listen": "0.0.0.0",
-            "listen_port": 53
+            "listen_port": int(os.environ.get("SINGBOX_DNS_PORT", "53"))
         }
     ],
     "outbounds": final_outbounds,

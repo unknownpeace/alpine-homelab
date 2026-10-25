@@ -25,6 +25,11 @@ cat << EOF > /etc/caddy/Caddyfile
         $AUTH_USER $RAW_HASH
     }
 }
+
+homelab.$BASE_DOMAIN, $IP_HOST {
+    root * /var/www/dashboard
+    file_server
+}
 EOF
 
 # Conditionally configure reverse proxies based on ENABLE_* flags
@@ -111,6 +116,15 @@ ytdl.$BASE_DOMAIN {
 EOF
 fi
 
+if [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
+cat << EOF >> /etc/caddy/Caddyfile
+
+adguard.$BASE_DOMAIN {
+    reverse_proxy 127.0.0.1:3001
+}
+EOF
+fi
+
 rc-update add caddy default >/dev/null 2>&1 || true
 rc-service caddy restart >/dev/null 2>&1 || true
 
@@ -119,7 +133,9 @@ CADDY_ROOT_CERT="/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.cr
 for attempt in 1 2 3; do
     if [ -f "$CADDY_ROOT_CERT" ]; then
         cp "$CADDY_ROOT_CERT" /root/caddy-homelab-root.crt
-        log_success "Caddy Root CA exported to /root/caddy-homelab-root.crt"
+        mkdir -p /var/www/dashboard
+        cp "$CADDY_ROOT_CERT" /var/www/dashboard/caddy-homelab-root.crt 2>/dev/null || true
+        log_success "Caddy Root CA exported to /root/caddy-homelab-root.crt and dashboard"
         break
     fi
     sleep 1

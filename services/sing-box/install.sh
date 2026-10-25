@@ -60,8 +60,14 @@ cp -f "$SERVICE_DIR/update-sub.py" /usr/local/bin/update-sub.py
 chmod +x /usr/local/bin/update-sub.py
 
 # 6. Generate configuration and start
+SINGBOX_DNS_PORT="53"
+if [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ]; then
+    SINGBOX_DNS_PORT="5353"
+    log_info "AdGuard Home enabled: assigning sing-box DNS to internal port 5353..."
+fi
+
 log_info "Compiling sing-box routing tables and DNS mapping (*.$BASE_DOMAIN)..."
-IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREAM_PRIMARY" DNS_UPSTREAM_SECONDARY="$DNS_UPSTREAM_SECONDARY" /usr/local/bin/update-sub.py "$SUB_URL"
+IP_HOST="$IP_HOST" BASE_DOMAIN="$BASE_DOMAIN" DNS_UPSTREAM_PRIMARY="$DNS_UPSTREAM_PRIMARY" DNS_UPSTREAM_SECONDARY="$DNS_UPSTREAM_SECONDARY" SINGBOX_DNS_PORT="$SINGBOX_DNS_PORT" /usr/local/bin/update-sub.py "$SUB_URL"
 
 rc-update add sing-box default >/dev/null 2>&1 || true
 rc-service sing-box restart >/dev/null 2>&1 || true

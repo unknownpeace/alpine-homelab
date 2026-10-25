@@ -99,7 +99,7 @@ def step_verify_all():
     sleep 3
     echo ""
     echo "=== HTTPS ENDPOINTS (PUBLIC & REDIRECTS) ==="
-    for d in vault.lan git.lan matrix.lan music.lan; do
+    for d in homelab.lan vault.lan git.lan matrix.lan music.lan; do
         for attempt in 1 2 3 4 5; do
             code=$(curl -s -k -o /dev/null -w "%{http_code}" --resolve $d:443:127.0.0.1 https://$d/)
             if [ "$code" = "200" ] || [ "$code" = "302" ]; then break; fi
@@ -117,6 +117,11 @@ def step_verify_all():
     done
 
     echo ""
+    echo "=== DISASTER RECOVERY BACKUP VERIFICATION ==="
+    /usr/local/bin/homelab backup /srv/storage/backups
+    ls -lh /srv/storage/backups/homelab_backup_*.tar.gz
+
+    echo ""
     echo "=== HOMELAB DOCTOR DIAGNOSTICS ==="
     /usr/local/bin/homelab doctor
 
@@ -130,9 +135,11 @@ def step_verify_all():
     '''
     res = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", f"root@{VM_IP}", verify_script], capture_output=True, text=True)
     print(res.stdout)
-    return ("vault.lan -> HTTP 200" in res.stdout and 
+    return ("homelab.lan -> HTTP 200" in res.stdout and
+            "vault.lan -> HTTP 200" in res.stdout and 
             "git.lan -> HTTP 200" in res.stdout and 
             "lxc.lan/ -> HTTP 200" in res.stdout and 
+            "Backup created:" in res.stdout and
             "Doctor Result: All systems operational!" in res.stdout and
             "ALL LXC MANAGER TESTS PASSED!" in res.stdout)
 
