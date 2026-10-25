@@ -662,6 +662,44 @@ def ensure_container_dns(name, net_mode=None):
                         pass
                 with open(resolv_path, "w", encoding="utf-8") as f:
                     f.write("nameserver 10.0.3.1\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+
+        # Systemd-networkd support:
+        # Many modern templates (Fedora, Arch Linux, etc.) enable systemd-networkd with default DHCP on eth0.
+        # In NAT mode (lxcbr0) or LAN static mode, networkd flushes the static IP assigned by LXC.
+        # We ensure /etc/systemd/network/eth0.network keeps configuration and assigns static IP.
+        netd_dir = os.path.join(rootfs_dir, "etc", "systemd", "network")
+        if os.path.exists(netd_dir):
+            ip_val = None
+            gw_val = "10.0.3.1"
+            if os.path.exists(cfg_path):
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        cfg_content = f.read()
+                    m_ip = re.search(r"^\s*lxc\.net\.0\.ipv4\.address\s*=\s*([^\s]+)", cfg_content, re.M)
+                    if m_ip:
+                        ip_val = m_ip.group(1)
+                    m_gw = re.search(r"^\s*lxc\.net\.0\.ipv4\.gateway\s*=\s*([^\s]+)", cfg_content, re.M)
+                    if m_gw:
+                        gw_val = m_gw.group(1)
+                except Exception:
+                    pass
+
+            if (net_mode == "nat" or (net_mode == "lan" and ip_val)) and ip_val:
+                eth_net = os.path.join(netd_dir, "eth0.network")
+                try:
+                    with open(eth_net, "w", encoding="utf-8") as f:
+                        f.write(f"""[Match]
+Name=eth0
+
+[Network]
+KeepConfiguration=yes
+Address={ip_val}
+Gateway={gw_val}
+DNS={gw_val}
+DNS=1.1.1.1
+""")
+                except Exception as e:
+                    logger.warning(f"Failed to write systemd-networkd config for {name}: {e}")
     except Exception as e:
         logger.warning(f"Failed to ensure DNS for container {name}: {e}")
 
