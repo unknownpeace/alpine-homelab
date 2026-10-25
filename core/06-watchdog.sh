@@ -208,7 +208,9 @@ if command -v smartctl >/dev/null 2>&1; then
         [ ! -b "$bdev" ] && continue
         bname=$(basename "$bdev")
         smart_out=$(smartctl -H "$bdev" 2>/dev/null || true)
-        if printf "%s" "$smart_out" | grep -qiE "FAILED|CRITICAL"; then
+        # Skip devices without SMART capability (virtual machines, loop, etc.)
+        printf "%s" "$smart_out" | grep -qiE "lacks SMART capability|Unavailable" && continue
+        if printf "%s" "$smart_out" | grep -qiE "(test result: (FAILED|BAD)|health status:.*(FAILED|CRITICAL))"; then
             ISSUES_COUNT=$((ISSUES_COUNT + 1))
             send_alert "smart_${bname}" "CRITICAL" "СБОЙ SMART на физическом накопителе ${bdev}! Требуется срочная замена диска и проверка бэкапов Restic."
         fi
