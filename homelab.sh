@@ -208,8 +208,9 @@ cmd_doctor() {
 
     echo ""
     echo -e "${C_WHITE}Checking Network Bridges:${C_RESET}"
-    local bridges="lxcbr0"
-    [ "${BRIDGE_ENABLE:-yes}" = "yes" ] && bridges="br0 lxcbr0"
+    local bridges=""
+    [ "${BRIDGE_ENABLE:-yes}" = "yes" ] && bridges="br0"
+    [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && bridges="$bridges lxcbr0"
     for br in $bridges; do
         if ip link show "$br" >/dev/null 2>&1; then
             echo -e "  [${C_GREEN}PASS${C_RESET}] Bridge $br exists and is UP"

@@ -14,6 +14,25 @@ if ! command -v lxc-create >/dev/null 2>&1 || ! command -v ttyd >/dev/null 2>&1;
     apk_add lxc lxc-openrc lxc-templates lxc-download rsync ttyd
 fi
 
+# Setup LXC Sandbox NAT bridge (10.0.3.1/24)
+if ! grep -q 'lxcbr0' /etc/network/interfaces; then
+cat << 'EOF' >> /etc/network/interfaces
+
+auto lxcbr0
+iface lxcbr0 inet static
+    address 10.0.3.1
+    netmask 255.255.255.0
+    bridge-stp 0
+EOF
+fi
+ifup lxcbr0 2>/dev/null || true
+
+# Enable and start OpenRC cgroups and lxc services
+rc-update add cgroups sysinit >/dev/null 2>&1 || true
+rc-service cgroups start >/dev/null 2>&1 || true
+rc-update add lxc default >/dev/null 2>&1 || true
+rc-service lxc start >/dev/null 2>&1 || true
+
 mkdir -p /opt/lxc-manager /var/lib/lxc/cache
 
 # 1. Pre-cache Alpine minirootfs for instant 1s sandbox cloning

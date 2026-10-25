@@ -36,29 +36,10 @@ EOF
     ip link set dev "$PHYSICAL_IF" up 2>/dev/null || true
 fi
 
-# 2. Setup LXC Sandbox NAT bridge (10.0.3.1/24)
-if ! grep -q 'lxcbr0' /etc/network/interfaces; then
-cat << 'EOF' >> /etc/network/interfaces
-
-auto lxcbr0
-iface lxcbr0 inet static
-    address 10.0.3.1
-    netmask 255.255.255.0
-    bridge-stp 0
-EOF
-fi
-ifup lxcbr0 2>/dev/null || true
-
-# 3. Enable TUN kernel module
+# 2. Enable TUN kernel module (for sing-box transparent proxy)
 modprobe tun 2>/dev/null || true
 if ! grep -q "^tun$" /etc/modules 2>/dev/null; then
     echo "tun" >> /etc/modules || true
 fi
 
-# 4. Enable and start OpenRC cgroups and lxc services
-rc-update add cgroups sysinit >/dev/null 2>&1 || true
-rc-service cgroups start >/dev/null 2>&1 || true
-rc-update add lxc default >/dev/null 2>&1 || true
-rc-service lxc start >/dev/null 2>&1 || true
-
-log_success "Network bridges initialized (br0: LAN, lxcbr0: 10.0.3.1/24)."
+log_success "Network bridges initialized (br0: Home LAN)."

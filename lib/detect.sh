@@ -129,33 +129,52 @@ if [ ! -f "$CONFIG_TARGET" ] && [ -t 0 ] && [ -z "${UNATTENDED:-}" ]; then
     # 3.8 Service Stack Selection
     echo ""
     echo -e "8. Набор устанавливаемых сервисов:"
-    echo -e "   ${C_CYAN}1)${C_RESET} Полный стек (9 сервисов: Caddy, sing-box, LXC, Vaultwarden, Git, Matrix, Music, Торренты, Samba, yt-dlp) [По умолчанию]"
-    echo -e "   ${C_CYAN}2)${C_RESET} Минимальный стек (Caddy + sing-box + LXC Sandbox, экономия RAM)"
-    printf "   Ваш выбор [1-2, Enter = 1]: "
+    echo -e "   ${C_CYAN}1)${C_RESET} Полный стек (9 сервисов + LXC, «всё включено», ~450 МБ RAM) [По умолчанию]"
+    echo -e "   ${C_CYAN}2)${C_RESET} Чистый сетевой шлюз (Caddy + sing-box, экономия RAM, ~45 МБ, без контейнеров)"
+    echo -e "   ${C_CYAN}3)${C_RESET} Шлюз + LXC Контейнеры (Caddy + sing-box + LXC Sandbox, ~150 МБ RAM)"
+    printf "   Ваш выбор [1-3, Enter = 1]: "
     read -r IN_STACK
-    if [ "$IN_STACK" = "2" ]; then
-        ENABLE_CADDY="yes"
-        ENABLE_SINGBOX="yes"
-        ENABLE_LXC_MANAGER="yes"
-        ENABLE_VAULTWARDEN="no"
-        ENABLE_FORGEJO="no"
-        ENABLE_CONDUIT="no"
-        ENABLE_NAVIDROME="no"
-        ENABLE_TRANSMISSION="no"
-        ENABLE_SAMBA="no"
-        ENABLE_YTDLP="no"
-    else
-        ENABLE_CADDY="yes"
-        ENABLE_SINGBOX="yes"
-        ENABLE_LXC_MANAGER="yes"
-        ENABLE_VAULTWARDEN="yes"
-        ENABLE_FORGEJO="yes"
-        ENABLE_CONDUIT="yes"
-        ENABLE_NAVIDROME="yes"
-        ENABLE_TRANSMISSION="yes"
-        ENABLE_SAMBA="yes"
-        ENABLE_YTDLP="yes"
-    fi
+    case "$IN_STACK" in
+        2)
+            ENABLE_CADDY="yes"
+            ENABLE_SINGBOX="yes"
+            ENABLE_DASHBOARD="yes"
+            ENABLE_LXC_MANAGER="no"
+            ENABLE_VAULTWARDEN="no"
+            ENABLE_FORGEJO="no"
+            ENABLE_CONDUIT="no"
+            ENABLE_NAVIDROME="no"
+            ENABLE_TRANSMISSION="no"
+            ENABLE_SAMBA="no"
+            ENABLE_YTDLP="no"
+            ;;
+        3)
+            ENABLE_CADDY="yes"
+            ENABLE_SINGBOX="yes"
+            ENABLE_DASHBOARD="yes"
+            ENABLE_LXC_MANAGER="yes"
+            ENABLE_VAULTWARDEN="no"
+            ENABLE_FORGEJO="no"
+            ENABLE_CONDUIT="no"
+            ENABLE_NAVIDROME="no"
+            ENABLE_TRANSMISSION="no"
+            ENABLE_SAMBA="no"
+            ENABLE_YTDLP="no"
+            ;;
+        *)
+            ENABLE_CADDY="yes"
+            ENABLE_SINGBOX="yes"
+            ENABLE_DASHBOARD="yes"
+            ENABLE_LXC_MANAGER="yes"
+            ENABLE_VAULTWARDEN="yes"
+            ENABLE_FORGEJO="yes"
+            ENABLE_CONDUIT="yes"
+            ENABLE_NAVIDROME="yes"
+            ENABLE_TRANSMISSION="yes"
+            ENABLE_SAMBA="yes"
+            ENABLE_YTDLP="yes"
+            ;;
+    esac
 
     # 3.9 Save answers to config.env
     mkdir -p "$(dirname "$CONFIG_TARGET")"
