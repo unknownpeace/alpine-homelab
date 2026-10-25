@@ -66,11 +66,11 @@ cat << EOF > /etc/caddy/Caddyfile
     import access_log
     encode zstd gzip
     handle_errors {
-        @custom_err expression `{err.status_code} in [404, 500, 502, 503, 504]`
+        @custom_err expression \`{err.status_code} in [404, 500, 502, 503, 504]\`
         handle @custom_err {
             header Content-Type "text/html; charset=utf-8"
             header Cache-Control "no-store"
-            respond `<!DOCTYPE html>
+            respond \`<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -102,7 +102,7 @@ cat << EOF > /etc/caddy/Caddyfile
     <a class="btn" href="javascript:location.reload()">Повторить запрос</a>
   </div>
 </body>
-</html>` {err.status_code}
+</html>\` {err.status_code}
         }
     }
 }
