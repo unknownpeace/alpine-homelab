@@ -4,6 +4,10 @@
 export LC_ALL="C.UTF-8"
 export LANG="C.UTF-8"
 
+SAFE_USER=$(echo "${AUTH_USER:-admin}" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
+[ -z "$SAFE_USER" ] && SAFE_USER="admin"
+export SAFE_USER
+
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
 C_RED="\033[1;31m"

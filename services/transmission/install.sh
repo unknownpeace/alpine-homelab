@@ -18,7 +18,7 @@ addgroup transmission media 2>/dev/null || true
 
 mkdir -p /var/lib/transmission/config "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" /var/log/transmission /etc/transmission /etc/periodic/weekly
 chown -R transmission:media /var/log/transmission /var/lib/transmission /etc/transmission 2>/dev/null || true
-chown -R "${SAFE_USER:-admin}:media" "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" 2>/dev/null || true
+chown -R "${SAFE_USER:-$AUTH_USER}:media" "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" 2>/dev/null || true
 chmod 2775 "$STORAGE_BASE/downloads" "$STORAGE_BASE/incomplete" 2>/dev/null || true
 
 cat << 'EOF' > /etc/conf.d/transmission-daemon

@@ -15,8 +15,9 @@ chmod 700 "${BACKUP_DIR:-/var/backups/homelab}" /etc/homelab
 addgroup -g 1000 media 2>/dev/null || addgroup media 2>/dev/null || true
 
 # Sanitize username to valid POSIX account (lowercase alphanumeric)
-SAFE_USER=$(echo "$AUTH_USER" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
+SAFE_USER=$(echo "${AUTH_USER:-admin}" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
 [ -z "$SAFE_USER" ] && SAFE_USER="admin"
+export SAFE_USER
 
 if ! id -u "$SAFE_USER" >/dev/null 2>&1; then
     adduser -D -u 1000 -G media "$SAFE_USER" 2>/dev/null || adduser -D -G media "$SAFE_USER" 2>/dev/null || true

@@ -331,6 +331,7 @@ cmd_doctor() {
     [ "${ENABLE_YTDLP:-yes}" = "yes" ]       && endpoints="$endpoints ytdl"
     [ "${ENABLE_SINGBOX:-yes}" = "yes" ]     && endpoints="$endpoints proxy"
     [ "${ENABLE_LXC_MANAGER:-yes}" = "yes" ] && endpoints="$endpoints lxc"
+    [ "${ENABLE_BESZEL:-yes}" = "yes" ] && [ -f "/etc/caddy/conf.d/beszel.conf" ] && endpoints="$endpoints monitor"
     [ "${ENABLE_ADGUARD_HOME:-no}" = "yes" ] && endpoints="$endpoints adguard"
     for prefix in $endpoints; do
         local d="$prefix.$BASE_DOMAIN"

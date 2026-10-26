@@ -18,7 +18,7 @@ fi
 smbpasswd -e "$AUTH_USER" 2>/dev/null || true
 
 mkdir -p "$STORAGE_BASE/timemachine"
-chown -R "${SAFE_USER:-admin}:media" "$STORAGE_BASE/timemachine" 2>/dev/null || true
+chown -R "${SAFE_USER:-$AUTH_USER}:media" "$STORAGE_BASE/timemachine" 2>/dev/null || true
 chmod 2770 "$STORAGE_BASE/timemachine" 2>/dev/null || true
 
 cat << EOF > /etc/samba/smb.conf

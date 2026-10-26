@@ -25,6 +25,9 @@ iface lxcbr0 inet static
     bridge-stp 0
 EOF
 fi
+ip link add name lxcbr0 type bridge 2>/dev/null || true
+ip addr add 10.0.3.1/24 dev lxcbr0 2>/dev/null || true
+ip link set dev lxcbr0 up 2>/dev/null || true
 ifup lxcbr0 2>/dev/null || true
 
 # 2. Configure OpenRC Unified cgroups v2 and delegate CPU/Memory/PIDs/IO controllers

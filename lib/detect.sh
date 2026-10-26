@@ -99,6 +99,8 @@ if { [ ! -f "$CONFIG_TARGET" ] || [ "${RECONFIG_MODE:-0}" = "1" ]; } && [ -t 0 ]
         echo -e "   ${C_YELLOW}[!] Предупреждение: имя пользователя исправлено на латиницу:${C_RESET} ${C_BOLD}$CLEAN_USER${C_RESET}"
     fi
     AUTH_USER="$CLEAN_USER"
+    SAFE_USER="$CLEAN_USER"
+    export AUTH_USER SAFE_USER
 
     # 3.2 Password
     if [ -n "$PREV_AUTH_PASS" ]; then
@@ -458,6 +460,8 @@ AUTH_USER="${AUTH_USER:-admin}"
 CLEAN_USER=$(echo "$AUTH_USER" | tr -cd 'a-zA-Z0-9_-' | tr '[:upper:]' '[:lower:]')
 [ -z "$CLEAN_USER" ] && CLEAN_USER="admin"
 AUTH_USER="$CLEAN_USER"
+SAFE_USER="$CLEAN_USER"
+export AUTH_USER SAFE_USER
 
 AUTH_PASS="${AUTH_PASS:-admin}"
 BASE_DOMAIN="${BASE_DOMAIN:-lan}"

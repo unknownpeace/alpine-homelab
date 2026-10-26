@@ -19,7 +19,7 @@ addgroup navidrome media 2>/dev/null || true
 mkdir -p /etc/navidrome /var/lib/navidrome "$STORAGE_BASE/music" /etc/conf.d
 touch /var/log/navidrome.log
 chown navidrome:media /var/log/navidrome.log 2>/dev/null || true
-chown -R "${SAFE_USER:-admin}:media" "$STORAGE_BASE/music" 2>/dev/null || true
+chown -R "${SAFE_USER:-$AUTH_USER}:media" "$STORAGE_BASE/music" 2>/dev/null || true
 chmod 2775 "$STORAGE_BASE/music" 2>/dev/null || true
 
 cat << 'EOF' > /etc/conf.d/navidrome
@@ -87,7 +87,7 @@ cat << 'EOF' > "$STORAGE_BASE/music/.playlists/lossless-favorites.nsp"
   "limit": 250
 }
 EOF
-chown -R "${SAFE_USER:-admin}:media" "$STORAGE_BASE/music/.playlists"
+chown -R "${SAFE_USER:-$AUTH_USER}:media" "$STORAGE_BASE/music/.playlists" 2>/dev/null || true
 chmod 775 "$STORAGE_BASE/music/.playlists"
 
 chown -R navidrome:media /var/lib/navidrome /etc/navidrome

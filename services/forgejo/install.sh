@@ -72,6 +72,9 @@ RUN_USER = forgejo
 RUN_MODE = prod
 WORK_PATH = /var/lib/forgejo
 
+[repository]
+SCRIPT_TYPE = sh
+
 [log]
 MODE = file
 LEVEL = Info
